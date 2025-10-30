@@ -1,0 +1,89 @@
+{
+  "name": "Invoice Processing Simple",
+  "description": "Versión simplificada sin imports de src",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start"
+    },
+    {
+      "id": "read_emails",
+      "type": "action",
+      "code": "import imaplib\nimport email\n\n# Get credentials from context\nemail_user = context['email_user']\nemail_password = context['email_password']\nimap_host = context['imap_host']\nimap_port = context['imap_port']\n\n# Connect to IMAP\nmail = imaplib.IMAP4_SSL(imap_host, imap_port)\nmail.login(email_user, email_password)\nmail.select('INBOX')\n\n# Search unread\nstatus, messages = mail.search(None, 'UNSEEN')\nemail_ids = messages[0].split()\n\nif not email_ids:\n    context['has_emails'] = False\n    mail.logout()\nelse:\n    email_id = email_ids[0]\n    status, msg_data = mail.fetch(email_id, '(RFC822)')\n    msg = email.message_from_bytes(msg_data[0][1])\n    \n    context['has_emails'] = True\n    context['current_email_id'] = email_id.decode()\n    context['email_from'] = msg.get('From', '')\n    context['email_subject'] = msg.get('Subject', '')\n    context['email_message_obj'] = msg\n    \n    # Check whitelist\n    sender_email = msg.get('From', '').split('<')[-1].strip('>')\n    whitelist = context.get('sender_whitelist', '')\n    if whitelist and whitelist not in sender_email:\n        context['passes_whitelist'] = False\n    else:\n        context['passes_whitelist'] = True\n    \n    # Keep mail connection for later\n    context['_mail_obj'] = mail",
+      "executor": "e2b",
+      "timeout": 30
+    },
+    {
+      "id": "check_pdf",
+      "type": "action",
+      "code": "if not context.get('has_emails') or not context.get('passes_whitelist'):\n    context['has_pdf'] = False\nelse:\n    msg = context['email_message_obj']\n    has_pdf = False\n    pdf_data = None\n    pdf_filename = None\n    \n    for part in msg.walk():\n        if part.get_content_maintype() == 'multipart':\n            continue\n        if part.get('Content-Disposition') is None:\n            continue\n        \n        filename = part.get_filename()\n        if filename and filename.lower().endswith('.pdf'):\n            has_pdf = True\n            pdf_data = part.get_payload(decode=True)\n            pdf_filename = filename\n            break\n    \n    context['has_pdf'] = has_pdf\n    context['pdf_data'] = pdf_data\n    context['pdf_filename'] = pdf_filename",
+      "executor": "e2b",
+      "timeout": 10
+    },
+    {
+      "id": "has_pdf_decision",
+      "type": "decision",
+      "code": "context['branch_decision'] = context.get('has_pdf', False)",
+      "timeout": 5
+    },
+    {
+      "id": "send_rejection",
+      "type": "action",
+      "code": "import smtplib\nfrom email.mime.text import MIMEText\n\nemail_user = context['email_user']\nemail_password = context['email_password']\nsmtp_host = context['smtp_host']\nsmtp_port = context['smtp_port']\n\nmsg = MIMEText('Email rechazado: no contiene PDF')\nmsg['From'] = email_user\nmsg['To'] = context['email_from']\nmsg['Subject'] = f\"Re: {context['email_subject']} - Sin PDF\"\n\nsmtp = smtplib.SMTP(smtp_host, smtp_port)\nsmtp.starttls()\nsmtp.login(email_user, email_password)\nsmtp.send_message(msg)\nsmtp.quit()\n\ncontext['rejection_sent'] = True",
+      "executor": "e2b",
+      "timeout": 20
+    },
+    {
+      "id": "extract_text",
+      "type": "action",
+      "code": "import fitz\nimport io\n\npdf_data = context['pdf_data']\npdf_stream = io.BytesIO(pdf_data)\ndoc = fitz.open(stream=pdf_stream, filetype='pdf')\n\nfull_text = ''\nfor page_num in range(len(doc)):\n    page = doc[page_num]\n    full_text += page.get_text()\n\ndoc.close()\n\ncontext['ocr_text'] = full_text\ncontext['pdf_size_bytes'] = len(pdf_data)",
+      "executor": "e2b",
+      "timeout": 30
+    },
+    {
+      "id": "find_amount",
+      "type": "action",
+      "code": "import re\n\nocr_text = context['ocr_text']\n\npatterns = [\n    r'total[:\\s]+€?\\s*(\\d+[.,]\\d{2})',\n    r'importe[:\\s]+€?\\s*(\\d+[.,]\\d{2})',\n    r'€\\s*(\\d+[.,]\\d{2})',\n]\n\namount_found = None\nfor pattern in patterns:\n    matches = re.findall(pattern, ocr_text, re.IGNORECASE)\n    if matches:\n        amount_str = matches[-1].replace(',', '.')\n        amount_found = float(amount_str)\n        break\n\nif amount_found is None:\n    matches = re.findall(r'(\\d+[.,]\\d{2})', ocr_text)\n    if matches:\n        amount_str = matches[-1].replace(',', '.')\n        amount_found = float(amount_str)\n\ncontext['total_amount'] = amount_found or 0.0",
+      "executor": "e2b",
+      "timeout": 10
+    },
+    {
+      "id": "amount_decision",
+      "type": "decision",
+      "code": "amount = context.get('total_amount', 0)\ncontext['branch_decision'] = amount > 1000",
+      "timeout": 5
+    },
+    {
+      "id": "send_high_budget",
+      "type": "action",
+      "code": "import smtplib\nfrom email.mime.text import MIMEText\n\nemail_user = context['email_user']\nemail_password = context['email_password']\nsmtp_host = context['smtp_host']\nsmtp_port = context['smtp_port']\namount = context['total_amount']\n\nmsg = MIMEText(f'Presupuesto alto: €{amount:.2f}')\nmsg['From'] = email_user\nmsg['To'] = context['email_from']\nmsg['Subject'] = f\"Re: {context['email_subject']} - Presupuesto Alto\"\n\nsmtp = smtplib.SMTP(smtp_host, smtp_port)\nsmtp.starttls()\nsmtp.login(email_user, email_password)\nsmtp.send_message(msg)\nsmtp.quit()\n\ncontext['high_budget_sent'] = True",
+      "executor": "e2b",
+      "timeout": 20
+    },
+    {
+      "id": "save_db",
+      "type": "action",
+      "code": "import psycopg2\n\ndb_host = context['db_host']\ndb_port = context['db_port']\ndb_name = context['db_name']\ndb_user = context['db_user']\ndb_password = context['db_password']\n\nconn = psycopg2.connect(\n    host=db_host,\n    port=db_port,\n    database=db_name,\n    user=db_user,\n    password=db_password\n)\n\ncursor = conn.cursor()\ncursor.execute(\"\"\"\n    INSERT INTO invoices (\n        email_from, email_subject,\n        pdf_filename, pdf_content, pdf_size_bytes,\n        ocr_text, ocr_method,\n        total_amount, currency\n    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)\n    RETURNING id\n\"\"\", (\n    context['email_from'],\n    context['email_subject'],\n    context['pdf_filename'],\n    context['pdf_data'],\n    context['pdf_size_bytes'],\n    context['ocr_text'],\n    'pymupdf',\n    context['total_amount'],\n    'EUR'\n))\n\ninvoice_id = cursor.fetchone()[0]\nconn.commit()\ncursor.close()\nconn.close()\n\ncontext['invoice_id'] = invoice_id",
+      "executor": "e2b",
+      "timeout": 30
+    },
+    {
+      "id": "end",
+      "type": "end"
+    }
+  ],
+  "edges": [
+    {"from": "start", "to": "read_emails"},
+    {"from": "read_emails", "to": "check_pdf"},
+    {"from": "check_pdf", "to": "has_pdf_decision"},
+    {"from": "has_pdf_decision", "to": "send_rejection", "condition": "false"},
+    {"from": "has_pdf_decision", "to": "extract_text", "condition": "true"},
+    {"from": "send_rejection", "to": "end"},
+    {"from": "extract_text", "to": "find_amount"},
+    {"from": "find_amount", "to": "amount_decision"},
+    {"from": "amount_decision", "to": "send_high_budget", "condition": "true"},
+    {"from": "amount_decision", "to": "save_db", "condition": "false"},
+    {"from": "send_high_budget", "to": "end"},
+    {"from": "save_db", "to": "end"}
+  ]
+}
