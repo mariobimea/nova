@@ -149,6 +149,7 @@ class E2BExecutor(ExecutorStrategy):
         Returns:
             Code with context injection
         """
+        # Use ensure_ascii=False for context injection to preserve UTF-8 characters
         context_json = json.dumps(context, ensure_ascii=False)
 
         full_code = f"""import json
@@ -159,9 +160,10 @@ context = json.loads('''{context_json}''')
 # User code
 {code}
 
-# Output updated context (with UTF-8 support)
-# Note: E2B uses custom OutStream that doesn't support reconfigure()
-print(json.dumps(context, ensure_ascii=False))
+# Output updated context
+# Use ensure_ascii=True to avoid encoding issues with E2B stdout
+# Unicode characters will be escaped as \\uXXXX but remain valid JSON
+print(json.dumps(context, ensure_ascii=True))
 """
         return full_code
 
