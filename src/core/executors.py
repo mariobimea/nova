@@ -160,8 +160,7 @@ context = json.loads('''{context_json}''')
 {code}
 
 # Output updated context (with UTF-8 support)
-import sys
-sys.stdout.reconfigure(encoding='utf-8')
+# Note: E2B uses custom OutStream that doesn't support reconfigure()
 print(json.dumps(context, ensure_ascii=False))
 """
         return full_code
