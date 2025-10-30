@@ -159,8 +159,10 @@ context = json.loads('''{context_json}''')
 # User code
 {code}
 
-# Output updated context
-print(json.dumps(context))
+# Output updated context (with UTF-8 support)
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+print(json.dumps(context, ensure_ascii=False))
 """
         return full_code
 
