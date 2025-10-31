@@ -30,20 +30,18 @@ import json
 from sqlalchemy.orm import Session
 
 from .nodes import create_node_from_dict, NodeType, StartNode, EndNode, ActionNode, DecisionNode
-from .executors import get_executor, ExecutionError
+from .executors import get_executor
 from .context import ContextManager
+from .exceptions import (
+    GraphValidationError,
+    GraphExecutionError,
+    ExecutorError,
+    E2BSandboxError,
+    E2BTimeoutError,
+    CodeExecutionError
+)
 
 logger = logging.getLogger(__name__)
-
-
-class GraphValidationError(Exception):
-    """Raised when workflow graph structure is invalid"""
-    pass
-
-
-class GraphExecutionError(Exception):
-    """Raised when workflow execution fails"""
-    pass
 
 
 class GraphEngine:
@@ -293,7 +291,7 @@ class GraphEngine:
             else:
                 raise GraphExecutionError(f"Unknown node type: {type(node)}")
 
-        except ExecutionError as e:
+        except (ExecutorError, E2BSandboxError, E2BTimeoutError, CodeExecutionError) as e:
             # Code execution failed in sandbox
             metadata["status"] = "failed"
             metadata["error_message"] = str(e)
@@ -412,8 +410,41 @@ class GraphEngine:
             except GraphExecutionError as e:
                 logger.error(f"Workflow execution failed at node {current_node_id}: {e}")
 
-                # Update Execution status if persistence is enabled
+                # Create metadata for the failed node
+                failed_metadata = {
+                    "node_id": current_node_id,
+                    "node_type": current_node.type,
+                    "status": "failed",
+                    "error_message": str(e),
+                    "input_context": context.snapshot(),
+                    "output_result": context.snapshot(),
+                    "execution_time": 0,
+                    "code_executed": getattr(current_node, 'code', None),
+                    "decision_result": None,
+                    "path_taken": None
+                }
+                execution_trace.append(failed_metadata)
+
+                # Persist failed node to ChainOfWork
                 if self.db_session and execution:
+                    from ..models.chain_of_work import ChainOfWork
+                    chain_entry = ChainOfWork(
+                        execution_id=execution.id,
+                        node_id=failed_metadata['node_id'],
+                        node_type=failed_metadata['node_type'],
+                        code_executed=failed_metadata.get('code_executed'),
+                        input_context=failed_metadata['input_context'],
+                        output_result=failed_metadata['output_result'],
+                        execution_time=failed_metadata['execution_time'],
+                        status=failed_metadata['status'],
+                        error_message=failed_metadata.get('error_message'),
+                        decision_result=failed_metadata.get('decision_result'),
+                        path_taken=failed_metadata.get('path_taken'),
+                        timestamp=datetime.utcnow()
+                    )
+                    self.db_session.add(chain_entry)
+
+                    # Update Execution status
                     execution.status = 'failed'
                     execution.error = str(e)
                     execution.completed_at = datetime.utcnow()
@@ -444,6 +475,19 @@ class GraphEngine:
             # Update path_taken for DecisionNode
             if isinstance(current_node, DecisionNode):
                 execution_trace[-1]["path_taken"] = next_node_id
+
+                # Update Chain of Work entry with path_taken
+                if self.db_session and execution:
+                    from ..models.chain_of_work import ChainOfWork
+                    # Get the last chain entry (the DecisionNode we just executed)
+                    last_chain_entry = self.db_session.query(ChainOfWork).filter(
+                        ChainOfWork.execution_id == execution.id,
+                        ChainOfWork.node_id == current_node_id
+                    ).order_by(ChainOfWork.id.desc()).first()
+
+                    if last_chain_entry:
+                        last_chain_entry.path_taken = next_node_id
+                        self.db_session.commit()
 
             current_node_id = next_node_id
 
