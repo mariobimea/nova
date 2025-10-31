@@ -21,6 +21,14 @@ import os
 import logging
 from celery import Celery
 from kombu import Queue, Exchange
+from ..core.logging_config import setup_logging
+
+# Initialize structured logging for Celery workers
+setup_logging(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    json_logs=os.getenv("JSON_LOGS", "true").lower() == "true",  # Default to JSON in workers
+    log_file=os.getenv("LOG_FILE", None)
+)
 
 logger = logging.getLogger(__name__)
 

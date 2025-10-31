@@ -3,22 +3,39 @@ FastAPI main application
 REST API endpoints for NOVA
 """
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Optional
 import os
+import logging
+import uuid
 
 from ..database import get_db_session
 from ..models.workflow import Workflow
 from ..models.execution import Execution
 from ..models.chain_of_work import ChainOfWork
 from ..core.engine import GraphEngine
+from ..core.logging_config import setup_logging, set_request_id, clear_request_id
 from .schemas import (
     WorkflowCreate, WorkflowUpdate, WorkflowResponse, WorkflowListResponse,
     ExecutionRequest, ExecutionResponse, ExecutionListResponse,
     ChainOfWorkResponse, MessageResponse
 )
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+
+# Initialize structured logging
+# Uses JSON logs in production (JSON_LOGS=true), standard logs in development
+setup_logging(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    json_logs=os.getenv("JSON_LOGS", "false").lower() == "true",
+    log_file=os.getenv("LOG_FILE", None)
+)
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # FASTAPI APP CONFIGURATION
@@ -176,6 +193,63 @@ def get_db():
 
 
 # ============================================================================
+# MIDDLEWARE - Request ID Tracking
+# ============================================================================
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """
+    Middleware to add request ID to all requests.
+
+    - Generates UUID for each request
+    - Sets request ID in logging context
+    - Adds X-Request-ID header to response
+    - Clears request ID after response
+    """
+    # Generate or use existing request ID
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+
+    # Set request ID in logging context
+    set_request_id(request_id)
+
+    # Log incoming request
+    logger.info(
+        f"{request.method} {request.url.path}",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "client_ip": request.client.host if request.client else None,
+        }
+    )
+
+    try:
+        # Process request
+        response = await call_next(request)
+
+        # Add request ID to response headers
+        response.headers["X-Request-ID"] = request_id
+
+        # Log response
+        logger.info(
+            f"Response {response.status_code}",
+            extra={
+                "status_code": response.status_code,
+            }
+        )
+
+        return response
+
+    except Exception as e:
+        # Log exception
+        logger.exception("Unhandled exception in request", extra={"error": str(e)})
+        raise
+
+    finally:
+        # Clear request ID from context
+        clear_request_id()
+
+
+# ============================================================================
 # EXCEPTION HANDLERS
 # ============================================================================
 
@@ -257,6 +331,110 @@ def health_check(db: Session = Depends(get_db)):
         "celery": celery_status,
         "redis": "configured" if os.getenv("REDIS_URL") else "not_configured"
     }
+
+
+@app.get(
+    "/metrics",
+    tags=["health"],
+    summary="System metrics",
+    description="""
+    Get comprehensive system metrics and health indicators.
+
+    Returns:
+    - **executions**: Workflow execution statistics (last 24 hours)
+        - total, completed, failed, pending
+        - success_rate percentage
+    - **error_rate**: Error rate (last 1 hour)
+        - total_executions, failed_executions
+        - error_rate percentage
+    - **circuit_breaker**: E2B executor circuit breaker status
+        - state (CLOSED, OPEN, HALF_OPEN)
+        - failure_count, failure_threshold
+        - is_healthy boolean
+    - **workflows**: Workflow statistics
+        - total_workflows, active_workflows
+    - **database**: Database health
+        - connected boolean
+        - response_time_ms
+
+    This endpoint is useful for:
+    - Monitoring dashboards
+    - Alerting systems
+    - Performance analysis
+    - Capacity planning
+    """
+)
+def get_metrics(db: Session = Depends(get_db)):
+    """Get system metrics - Returns comprehensive health and performance metrics"""
+    from ..core.metrics import MetricsCollector
+
+    try:
+        collector = MetricsCollector(db)
+        metrics = collector.get_all_metrics()
+
+        logger.info(
+            "Metrics collected",
+            extra={
+                "success_rate": metrics["executions"]["success_rate"],
+                "error_rate": metrics["error_rate"]["error_rate"],
+                "circuit_breaker_state": metrics["circuit_breaker"]["state"]
+            }
+        )
+
+        return metrics
+
+    except Exception as e:
+        logger.exception("Failed to collect metrics")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to collect metrics: {str(e)}"
+        )
+
+
+@app.get(
+    "/health/detailed",
+    tags=["health"],
+    summary="Detailed health check",
+    description="""
+    Get detailed system health status with component-level diagnostics.
+
+    Returns:
+    - **healthy**: Overall health status (true/false)
+    - **components**: Status of each component
+        - database, executor, error_rate
+    - **issues**: List of detected issues (if any)
+    - **metrics**: Full system metrics
+
+    This endpoint is useful for:
+    - Troubleshooting system issues
+    - Pre-deployment health verification
+    - Incident response
+    """
+)
+def detailed_health_check(db: Session = Depends(get_db)):
+    """Detailed health check - Returns component-level health diagnostics"""
+    from ..core.metrics import check_system_health
+
+    try:
+        health = check_system_health(db)
+
+        # Log health status
+        if health["healthy"]:
+            logger.info("System health check: HEALTHY")
+        else:
+            logger.warning(
+                "System health check: UNHEALTHY",
+                extra={"issues": health["issues"]}
+            )
+
+        return health
+
+    except Exception as e:
+        logger.exception("Health check failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Health check failed: {str(e)}"
+        )
 
 
 # ============================================================================
