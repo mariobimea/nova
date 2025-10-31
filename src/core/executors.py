@@ -149,8 +149,11 @@ class E2BExecutor(ExecutorStrategy):
         Returns:
             Code with context injection
         """
-        # Use ensure_ascii=False for context injection to preserve UTF-8 characters
-        context_json = json.dumps(context, ensure_ascii=False)
+        # CRITICAL: Use ensure_ascii=True for BOTH injection and output
+        # This prevents UnicodeEncodeError in E2B sandbox when context contains
+        # special characters like \xa0 (non-breaking space), accented characters, etc.
+        # Unicode characters are safely escaped as \uXXXX which works in all environments
+        context_json = json.dumps(context, ensure_ascii=True)
 
         full_code = f"""import json
 
