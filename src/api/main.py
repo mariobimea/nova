@@ -164,79 +164,133 @@ def delete_workflow(workflow_id: int, db: Session = Depends(get_db)):
 # WORKFLOW EXECUTION
 # ============================================================================
 
-@app.post("/workflows/{workflow_id}/execute", response_model=ExecutionResponse, status_code=202)
+@app.post("/workflows/{workflow_id}/execute", status_code=202)
 async def execute_workflow(
     workflow_id: int,
     execution_request: ExecutionRequest,
     db: Session = Depends(get_db)
 ):
     """
-    Execute a workflow with persistence.
+    Execute a workflow asynchronously using Celery.
 
-    If client_slug is provided, credentials will be automatically loaded from database
-    and injected into the initial_context.
+    This endpoint:
+    1. Validates workflow exists
+    2. Queues task in Celery/Redis
+    3. Returns immediately with task_id (HTTP 202)
+    4. Workflow executes in background worker
 
-    This endpoint executes the workflow synchronously and returns the execution result.
-    For long-running workflows, consider implementing async execution with Celery.
+    If client_slug is provided, credentials will be automatically loaded by the worker
+    and injected into the workflow context.
+
+    Returns:
+        {
+            "task_id": "abc123-...",
+            "status": "queued",
+            "workflow_id": 1,
+            "workflow_name": "Invoice Processing",
+            "message": "Workflow queued for execution. Use GET /tasks/{task_id} to check status."
+        }
+
+    Use GET /tasks/{task_id} to poll for results.
     """
+    from ..workers.tasks import execute_workflow_task
 
-    # Get workflow
+    # Verify workflow exists
     workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
     if not workflow:
         raise HTTPException(status_code=404, detail=f"Workflow {workflow_id} not found")
 
-    # Prepare initial context
-    initial_context = execution_request.initial_context or {}
-
-    # Load credentials from database if client_slug is provided
+    # Verify credentials exist if client_slug provided
     if execution_request.client_slug:
-        from ..models.credentials import get_email_credentials, get_database_credentials
-
+        from ..models.credentials import get_client_id
         try:
-            # Load email credentials
-            email_creds = get_email_credentials(execution_request.client_slug)
-            initial_context.update({
-                "client_slug": execution_request.client_slug,
-                "email_user": email_creds.email_user,
-                "email_password": email_creds.email_password,
-                "imap_host": email_creds.imap_host,
-                "imap_port": email_creds.imap_port,
-                "smtp_host": email_creds.smtp_host,
-                "smtp_port": email_creds.smtp_port,
-                "sender_whitelist": email_creds.sender_whitelist,
-            })
+            get_client_id(execution_request.client_slug)
+        except ValueError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Client '{execution_request.client_slug}' not found or inactive"
+            )
 
-            # Load database credentials
-            db_creds = get_database_credentials(execution_request.client_slug)
-            initial_context.update({
-                "db_host": db_creds.db_host,
-                "db_port": db_creds.db_port,
-                "db_name": db_creds.db_name,
-                "db_user": db_creds.db_user,
-                "db_password": db_creds.db_password,
-            })
+    # Queue task in Celery
+    task = execute_workflow_task.delay(
+        workflow_id=workflow_id,
+        initial_context=execution_request.initial_context or {},
+        client_slug=execution_request.client_slug,
+    )
 
-        except ValueError as e:
-            raise HTTPException(status_code=404, detail=f"Credentials not found for client '{execution_request.client_slug}': {str(e)}")
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "workflow_id": workflow_id,
+        "workflow_name": workflow.name,
+        "message": f"Workflow queued for execution. Use GET /tasks/{task.id} to check status.",
+    }
 
-    # Create engine with database session
-    engine = GraphEngine(db_session=db)
 
-    # Execute workflow
-    try:
-        result = await engine.execute_workflow(
-            workflow_definition=workflow.graph_definition,
-            initial_context=initial_context,
-            workflow_id=workflow.id
-        )
+# ============================================================================
+# TASK STATUS (Celery)
+# ============================================================================
 
-        # Get created execution
-        execution = db.query(Execution).filter(Execution.id == result['execution_id']).first()
+@app.get("/tasks/{task_id}")
+def get_task_status(task_id: str):
+    """
+    Get status of a Celery task.
 
-        return execution
+    Task States:
+    - PENDING: Task queued, not started yet
+    - STARTED: Task started execution
+    - RUNNING: Task is running (custom state)
+    - SUCCESS: Task completed successfully
+    - FAILURE: Task failed
+    - RETRY: Task failed, retrying
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Workflow execution failed: {str(e)}")
+    Returns:
+        {
+            "task_id": "abc123",
+            "status": "SUCCESS",
+            "result": {...},  # Only if SUCCESS
+            "error": "...",    # Only if FAILURE
+            "meta": {...}      # Task metadata (execution_id, workflow_id, etc.)
+        }
+    """
+    from celery.result import AsyncResult
+    from ..workers.celery_app import celery_app
+
+    task_result = AsyncResult(task_id, app=celery_app)
+
+    response = {
+        "task_id": task_id,
+        "status": task_result.state,
+    }
+
+    if task_result.state == "PENDING":
+        response["message"] = "Task is queued, waiting for worker"
+
+    elif task_result.state == "STARTED" or task_result.state == "RUNNING":
+        response["message"] = "Task is executing"
+        # Include metadata if available
+        if task_result.info:
+            response["meta"] = task_result.info
+
+    elif task_result.state == "SUCCESS":
+        response["message"] = "Task completed successfully"
+        response["result"] = task_result.result
+        # Extract execution_id for easy access
+        if task_result.result and "execution_id" in task_result.result:
+            response["execution_id"] = task_result.result["execution_id"]
+
+    elif task_result.state == "FAILURE":
+        response["message"] = "Task failed"
+        response["error"] = str(task_result.info)
+
+    elif task_result.state == "RETRY":
+        response["message"] = f"Task failed, retrying ({task_result.info.get('retries', 0)} attempts)"
+        response["error"] = str(task_result.info)
+
+    else:
+        response["message"] = f"Unknown state: {task_result.state}"
+
+    return response
 
 
 # ============================================================================

@@ -10,6 +10,7 @@ alembic==1.14.0
 # Async Tasks
 celery==5.4.0
 redis==5.2.1
+kombu==5.4.2  # Required by Celery for message queuing
 
 # HTTP Client (for API integrations if needed)
 requests==2.32.5
