@@ -4,6 +4,7 @@ REST API endpoints for NOVA
 """
 
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Optional
 import os
@@ -19,10 +20,148 @@ from .schemas import (
     ChainOfWorkResponse, MessageResponse
 )
 
+# ============================================================================
+# FASTAPI APP CONFIGURATION
+# ============================================================================
+
 app = FastAPI(
     title="NOVA API",
-    description="Neural Orchestration & Validation Agent - Workflow Execution Engine",
-    version="0.1.0"
+    description="""
+# Neural Orchestration & Validation Agent
+
+NOVA is a workflow execution engine that runs workflows as directed graphs with conditional logic.
+
+## Key Features
+
+- 🔄 **Graph-based workflows**: Execute complex workflows with conditional branching (DecisionNodes)
+- ⚡ **Async execution**: Non-blocking workflow execution using Celery + Redis
+- 🔒 **Secure code execution**: Isolated Docker sandbox via E2B Cloud
+- 📊 **Complete traceability**: Chain of Work tracks every node execution
+- 🎯 **Client credentials**: Auto-inject client-specific credentials into workflows
+- 🔁 **Automatic retries**: Failed tasks retry automatically with exponential backoff
+
+## Workflow Execution Flow
+
+1. **POST /workflows/{id}/execute** - Queue workflow for async execution
+2. API returns `task_id` immediately (HTTP 202 Accepted)
+3. **GET /tasks/{task_id}** - Poll for task status and results
+4. **GET /executions/{id}/chain** - View complete execution trace (Chain of Work)
+
+## Example Usage
+
+### Python
+
+```python
+import requests
+import time
+
+# 1. Execute workflow asynchronously
+response = requests.post(
+    "https://your-api.com/workflows/1/execute",
+    json={
+        "client_slug": "idom",
+        "initial_context": {"invoice_url": "https://example.com/invoice.pdf"}
+    }
+)
+task_id = response.json()["task_id"]
+
+# 2. Poll for results (or use webhooks in production)
+while True:
+    result = requests.get(f"https://your-api.com/tasks/{task_id}")
+    status = result.json()["status"]
+
+    if status == "SUCCESS":
+        print("Workflow completed!", result.json()["result"])
+        break
+    elif status == "FAILURE":
+        print("Workflow failed!", result.json()["error"])
+        break
+
+    time.sleep(2)  # Wait 2 seconds before polling again
+
+# 3. Get full execution trace
+execution_id = result.json()["result"]["execution_id"]
+chain = requests.get(f"https://your-api.com/executions/{execution_id}/chain")
+print("Chain of Work:", chain.json())
+```
+
+### cURL
+
+```bash
+# Execute workflow
+curl -X POST https://your-api.com/workflows/1/execute \\
+  -H "Content-Type: application/json" \\
+  -d '{"client_slug": "idom", "initial_context": {"data": "value"}}'
+
+# Check task status
+curl https://your-api.com/tasks/{task_id}
+
+# Get execution trace
+curl https://your-api.com/executions/{execution_id}/chain
+```
+
+## Architecture
+
+### Components
+
+- **API (FastAPI)**: REST API endpoints (this service)
+- **Worker (Celery)**: Background task processor
+- **Redis**: Message broker for Celery
+- **PostgreSQL**: Persistent storage (workflows, executions, chain of work)
+- **E2B Sandbox**: Isolated Docker environment for code execution
+
+### Tech Stack
+
+- **Backend**: Python 3.11, FastAPI, SQLAlchemy
+- **Workers**: Celery, Redis
+- **Database**: PostgreSQL
+- **Sandbox**: E2B Cloud (Docker)
+- **Deployment**: Railway
+
+## Authentication
+
+⚠️ **Currently open API**. Authentication will be added in Phase 2.
+
+## Rate Limits
+
+⚠️ **No rate limits in MVP**. Will be added in production.
+
+## Support
+
+- **Documentation**: See `/docs` for interactive API documentation
+- **Email**: ferrermarinmario@gmail.com
+- **Repository**: Internal
+    """,
+    version="0.1.0",
+    contact={
+        "name": "Mario Ferrer",
+        "email": "ferrermarinmario@gmail.com"
+    },
+    license_info={
+        "name": "Proprietary"
+    },
+    openapi_tags=[
+        {
+            "name": "health",
+            "description": "Health checks and system status"
+        },
+        {
+            "name": "workflows",
+            "description": "Workflow CRUD operations. Workflows define the graph structure (nodes + edges)."
+        },
+        {
+            "name": "execution",
+            "description": "Async workflow execution. Queue workflows and poll for results."
+        },
+        {
+            "name": "tasks",
+            "description": "Celery task status. Poll task state after queueing workflow."
+        },
+        {
+            "name": "executions",
+            "description": "Execution history and Chain of Work. View completed/failed executions."
+        }
+    ]
 )
 
 
@@ -37,23 +176,63 @@ def get_db():
 
 
 # ============================================================================
+# EXCEPTION HANDLERS
+# ============================================================================
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    """Custom HTTP exception handler for better error responses"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "status_code": exc.status_code
+        }
+    )
+
+
+# ============================================================================
 # ROOT & HEALTH
 # ============================================================================
 
-@app.get("/")
+@app.get(
+    "/",
+    tags=["health"],
+    summary="API root",
+    description="Returns basic API information and links to documentation."
+)
 def root():
-    """Root endpoint"""
+    """Root endpoint - Returns API info"""
     return {
         "name": "NOVA API",
         "version": "0.1.0",
         "status": "healthy",
-        "docs": "/docs"
+        "docs": "/docs",
+        "redoc": "/redoc"
     }
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    tags=["health"],
+    summary="Health check",
+    description="""
+    Check if all NOVA components are healthy.
+
+    Returns:
+    - **database**: PostgreSQL connection status
+    - **e2b**: E2B API key configuration status
+    - **celery**: Celery worker configuration status
+    - **redis**: Redis connection status
+
+    This endpoint is useful for:
+    - Deployment health checks
+    - Monitoring/alerting systems
+    - Load balancer health probes
+    """
+)
 def health_check(db: Session = Depends(get_db)):
-    """Health check endpoint"""
+    """Health check endpoint - Checks database, E2B, Celery, Redis"""
     from sqlalchemy import text
     try:
         # Test database connection
@@ -84,7 +263,42 @@ def health_check(db: Session = Depends(get_db)):
 # WORKFLOWS CRUD
 # ============================================================================
 
-@app.post("/workflows", response_model=WorkflowResponse, status_code=201)
+@app.post(
+    "/workflows",
+    response_model=WorkflowResponse,
+    status_code=201,
+    tags=["workflows"],
+    summary="Create workflow",
+    description="""
+    Create a new workflow definition.
+
+    A workflow is a directed graph with:
+    - **nodes**: Start, End, ActionNode (execute code), DecisionNode (conditional branch)
+    - **edges**: Connections between nodes
+
+    Example graph_definition:
+    ```json
+    {
+      "nodes": [
+        {"id": "start", "type": "start"},
+        {"id": "process", "type": "action", "code": "context['result'] = 2 + 2", "executor": "e2b"},
+        {"id": "decide", "type": "decision", "condition": "context.get('result', 0) > 3"},
+        {"id": "high", "type": "action", "code": "print('High')", "executor": "e2b"},
+        {"id": "low", "type": "action", "code": "print('Low')", "executor": "e2b"},
+        {"id": "end", "type": "end"}
+      ],
+      "edges": [
+        {"from": "start", "to": "process"},
+        {"from": "process", "to": "decide"},
+        {"from": "decide", "to": "high", "condition": "true"},
+        {"from": "decide", "to": "low", "condition": "false"},
+        {"from": "high", "to": "end"},
+        {"from": "low", "to": "end"}
+      ]
+    }
+    ```
+    """
+)
 def create_workflow(workflow: WorkflowCreate, db: Session = Depends(get_db)):
     """Create a new workflow"""
 
@@ -107,22 +321,34 @@ def create_workflow(workflow: WorkflowCreate, db: Session = Depends(get_db)):
     return db_workflow
 
 
-@app.get("/workflows", response_model=WorkflowListResponse)
+@app.get(
+    "/workflows",
+    response_model=WorkflowListResponse,
+    tags=["workflows"],
+    summary="List workflows",
+    description="List all workflows with pagination. Use skip/limit for pagination."
+)
 def list_workflows(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db)
 ):
-    """List all workflows"""
+    """List all workflows with pagination"""
     workflows = db.query(Workflow).offset(skip).limit(limit).all()
     total = db.query(Workflow).count()
 
     return {"workflows": workflows, "total": total}
 
 
-@app.get("/workflows/{workflow_id}", response_model=WorkflowResponse)
+@app.get(
+    "/workflows/{workflow_id}",
+    response_model=WorkflowResponse,
+    tags=["workflows"],
+    summary="Get workflow",
+    description="Get a specific workflow by ID. Returns full workflow definition including graph structure."
+)
 def get_workflow(workflow_id: int, db: Session = Depends(get_db)):
-    """Get a specific workflow"""
+    """Get a specific workflow by ID"""
     workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
 
     if not workflow:
@@ -131,13 +357,19 @@ def get_workflow(workflow_id: int, db: Session = Depends(get_db)):
     return workflow
 
 
-@app.put("/workflows/{workflow_id}", response_model=WorkflowResponse)
+@app.put(
+    "/workflows/{workflow_id}",
+    response_model=WorkflowResponse,
+    tags=["workflows"],
+    summary="Update workflow",
+    description="Update an existing workflow. All fields are optional - only provided fields will be updated."
+)
 def update_workflow(
     workflow_id: int,
     workflow_update: WorkflowUpdate,
     db: Session = Depends(get_db)
 ):
-    """Update a workflow"""
+    """Update an existing workflow"""
     workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
 
     if not workflow:
@@ -157,9 +389,15 @@ def update_workflow(
     return workflow
 
 
-@app.delete("/workflows/{workflow_id}", response_model=MessageResponse)
+@app.delete(
+    "/workflows/{workflow_id}",
+    response_model=MessageResponse,
+    tags=["workflows"],
+    summary="Delete workflow",
+    description="Delete a workflow. ⚠️ This will also delete all associated executions and chain of work entries."
+)
 def delete_workflow(workflow_id: int, db: Session = Depends(get_db)):
-    """Delete a workflow"""
+    """Delete a workflow and all associated executions"""
     workflow = db.query(Workflow).filter(Workflow.id == workflow_id).first()
 
     if not workflow:
@@ -175,7 +413,69 @@ def delete_workflow(workflow_id: int, db: Session = Depends(get_db)):
 # WORKFLOW EXECUTION
 # ============================================================================
 
-@app.post("/workflows/{workflow_id}/execute", status_code=202)
+@app.post(
+    "/workflows/{workflow_id}/execute",
+    status_code=202,
+    tags=["execution"],
+    summary="Execute workflow (async)",
+    description="""
+    Execute a workflow asynchronously using Celery.
+
+    ## How it works
+
+    1. API validates workflow exists
+    2. Task is queued in Celery/Redis
+    3. API returns immediately with `task_id` (HTTP 202 Accepted)
+    4. Background worker executes workflow
+    5. Poll GET /tasks/{task_id} for status/results
+
+    ## Parameters
+
+    - **client_slug** (optional): Load client credentials from database (e.g., "idom")
+        - If provided, credentials are auto-injected into workflow context
+        - Example: email settings, database connections, API keys
+    - **initial_context** (optional): Custom data to pass to workflow
+        - Available as `context` variable in all nodes
+        - Example: `{"invoice_url": "https://...", "user_id": 123}`
+
+    ## Response
+
+    Returns task_id for polling:
+    ```json
+    {
+      "task_id": "abc123-def456-...",
+      "status": "queued",
+      "workflow_id": 1,
+      "workflow_name": "Invoice Processing",
+      "message": "Workflow queued for execution. Use GET /tasks/{task_id} to check status."
+    }
+    ```
+
+    ## Polling Results
+
+    Use GET /tasks/{task_id} to poll for completion:
+    - **PENDING**: Task queued, not started
+    - **RUNNING**: Task executing
+    - **SUCCESS**: Task completed (result available)
+    - **FAILURE**: Task failed (error available)
+    - **RETRY**: Task failed, retrying
+
+    ## Example
+
+    ```python
+    # Execute workflow
+    response = requests.post("/workflows/1/execute", json={
+        "client_slug": "idom",
+        "initial_context": {"invoice_url": "https://example.com/invoice.pdf"}
+    })
+    task_id = response.json()["task_id"]
+
+    # Poll for result
+    result = requests.get(f"/tasks/{task_id}")
+    print(result.json())
+    ```
+    """
+)
 async def execute_workflow(
     workflow_id: int,
     execution_request: ExecutionRequest,
@@ -183,26 +483,7 @@ async def execute_workflow(
 ):
     """
     Execute a workflow asynchronously using Celery.
-
-    This endpoint:
-    1. Validates workflow exists
-    2. Queues task in Celery/Redis
-    3. Returns immediately with task_id (HTTP 202)
-    4. Workflow executes in background worker
-
-    If client_slug is provided, credentials will be automatically loaded by the worker
-    and injected into the workflow context.
-
-    Returns:
-        {
-            "task_id": "abc123-...",
-            "status": "queued",
-            "workflow_id": 1,
-            "workflow_name": "Invoice Processing",
-            "message": "Workflow queued for execution. Use GET /tasks/{task_id} to check status."
-        }
-
-    Use GET /tasks/{task_id} to poll for results.
+    Returns task_id immediately for polling.
     """
     from ..workers.tasks import execute_workflow_task
 
@@ -242,27 +523,81 @@ async def execute_workflow(
 # TASK STATUS (Celery)
 # ============================================================================
 
-@app.get("/tasks/{task_id}")
+@app.get(
+    "/tasks/{task_id}",
+    tags=["tasks"],
+    summary="Get task status",
+    description="""
+    Get status of a Celery task (workflow execution).
+
+    ## Task States
+
+    - **PENDING**: Task queued, waiting for worker to pick it up
+    - **STARTED**: Worker started processing the task
+    - **RUNNING**: Task is currently executing (custom state)
+    - **SUCCESS**: Task completed successfully
+        - `result` contains final workflow output
+        - `execution_id` available for Chain of Work lookup
+    - **FAILURE**: Task failed
+        - `error` contains error message
+    - **RETRY**: Task failed, automatically retrying
+        - Retries up to 3 times with exponential backoff
+
+    ## Response Examples
+
+    ### Success
+    ```json
+    {
+      "task_id": "abc123",
+      "status": "SUCCESS",
+      "message": "Task completed successfully",
+      "result": {
+        "execution_id": 10,
+        "status": "success",
+        "final_context": {...}
+      },
+      "execution_id": 10
+    }
+    ```
+
+    ### Running
+    ```json
+    {
+      "task_id": "abc123",
+      "status": "RUNNING",
+      "message": "Task is executing",
+      "meta": {
+        "execution_id": 10,
+        "workflow_id": 1,
+        "started_at": "2025-10-31T22:52:28Z"
+      }
+    }
+    ```
+
+    ### Failure
+    ```json
+    {
+      "task_id": "abc123",
+      "status": "FAILURE",
+      "message": "Task failed",
+      "error": "E2BSandboxError: Timeout after 600s"
+    }
+    ```
+
+    ## Polling Strategy
+
+    Recommended polling interval:
+    - First 30 seconds: Poll every 2 seconds
+    - After 30 seconds: Poll every 5-10 seconds
+    - After 2 minutes: Poll every 30 seconds
+
+    Or use webhooks (coming in Phase 2).
+    """
+)
 def get_task_status(task_id: str):
     """
     Get status of a Celery task.
-
-    Task States:
-    - PENDING: Task queued, not started yet
-    - STARTED: Task started execution
-    - RUNNING: Task is running (custom state)
-    - SUCCESS: Task completed successfully
-    - FAILURE: Task failed
-    - RETRY: Task failed, retrying
-
-    Returns:
-        {
-            "task_id": "abc123",
-            "status": "SUCCESS",
-            "result": {...},  # Only if SUCCESS
-            "error": "...",    # Only if FAILURE
-            "meta": {...}      # Task metadata (execution_id, workflow_id, etc.)
-        }
+    Poll this endpoint to get workflow execution results.
     """
     from celery.result import AsyncResult
     from ..workers.celery_app import celery_app
@@ -308,7 +643,34 @@ def get_task_status(task_id: str):
 # EXECUTIONS
 # ============================================================================
 
-@app.get("/executions", response_model=ExecutionListResponse)
+@app.get(
+    "/executions",
+    response_model=ExecutionListResponse,
+    tags=["executions"],
+    summary="List executions",
+    description="""
+    List workflow executions with optional filters.
+
+    ## Filters
+
+    - **workflow_id**: Filter by workflow (e.g., `?workflow_id=1`)
+    - **status**: Filter by status (e.g., `?status=success`)
+    - **skip/limit**: Pagination (e.g., `?skip=0&limit=50`)
+
+    ## Example
+
+    ```bash
+    # Get all executions for workflow 1
+    GET /executions?workflow_id=1
+
+    # Get failed executions
+    GET /executions?status=failed
+
+    # Pagination
+    GET /executions?skip=20&limit=10
+    ```
+    """
+)
 def list_executions(
     workflow_id: Optional[int] = None,
     status: Optional[str] = None,
@@ -316,7 +678,7 @@ def list_executions(
     limit: int = 100,
     db: Session = Depends(get_db)
 ):
-    """List executions with optional filters"""
+    """List executions with optional filters (workflow_id, status)"""
     query = db.query(Execution)
 
     if workflow_id:
@@ -330,9 +692,24 @@ def list_executions(
     return {"executions": executions, "total": total}
 
 
-@app.get("/executions/{execution_id}", response_model=ExecutionResponse)
+@app.get(
+    "/executions/{execution_id}",
+    response_model=ExecutionResponse,
+    tags=["executions"],
+    summary="Get execution",
+    description="""
+    Get a specific execution by ID.
+
+    Returns:
+    - Execution status (success/failed/running)
+    - Start/end timestamps
+    - Final result or error message
+
+    For detailed step-by-step trace, use GET /executions/{id}/chain
+    """
+)
 def get_execution(execution_id: int, db: Session = Depends(get_db)):
-    """Get a specific execution"""
+    """Get a specific execution by ID"""
     execution = db.query(Execution).filter(Execution.id == execution_id).first()
 
     if not execution:
@@ -341,9 +718,72 @@ def get_execution(execution_id: int, db: Session = Depends(get_db)):
     return execution
 
 
-@app.get("/executions/{execution_id}/chain", response_model=ChainOfWorkResponse)
+@app.get(
+    "/executions/{execution_id}/chain",
+    response_model=ChainOfWorkResponse,
+    tags=["executions"],
+    summary="Get Chain of Work",
+    description="""
+    Get complete execution trace (Chain of Work) for an execution.
+
+    ## What is Chain of Work?
+
+    Complete audit trail of workflow execution:
+    - Every node executed
+    - Code executed at each node
+    - Input context and output result
+    - Execution time per node
+    - Decisions taken and paths followed
+    - Errors encountered
+
+    ## Use Cases
+
+    - **Debugging**: See exactly what happened at each step
+    - **Auditing**: Complete trail for compliance
+    - **Optimization**: Identify slow nodes
+    - **Learning**: Understand how workflows execute
+
+    ## Response
+
+    ```json
+    {
+      "execution_id": 10,
+      "total": 11,
+      "entries": [
+        {
+          "node_id": "start",
+          "node_type": "start",
+          "status": "success",
+          "execution_time": 0.001,
+          "input_context": {...},
+          "output_result": {...}
+        },
+        {
+          "node_id": "extract_data",
+          "node_type": "action",
+          "status": "success",
+          "code_executed": "context['data'] = extract(...)",
+          "execution_time": 2.5,
+          "input_context": {...},
+          "output_result": {...}
+        },
+        {
+          "node_id": "check_amount",
+          "node_type": "decision",
+          "status": "success",
+          "decision_result": "true",
+          "path_taken": "high_budget",
+          "execution_time": 0.01,
+          "input_context": {...}
+        },
+        ...
+      ]
+    }
+    ```
+    """
+)
 def get_chain_of_work(execution_id: int, db: Session = Depends(get_db)):
-    """Get chain of work for an execution"""
+    """Get Chain of Work (execution trace) for an execution"""
 
     # Check if execution exists
     execution = db.query(Execution).filter(Execution.id == execution_id).first()
