@@ -62,10 +62,21 @@ def health_check(db: Session = Depends(get_db)):
     except Exception as e:
         db_status = f"error: {str(e)}"
 
+    # Test Celery imports
+    celery_status = "not_configured"
+    try:
+        from ..workers.celery_app import celery_app
+        from ..workers.tasks import execute_workflow_task
+        celery_status = "configured"
+    except Exception as e:
+        celery_status = f"error: {str(e)}"
+
     return {
         "status": "healthy",
         "database": db_status,
-        "e2b": "configured" if os.getenv("E2B_API_KEY") else "not_configured"
+        "e2b": "configured" if os.getenv("E2B_API_KEY") else "not_configured",
+        "celery": celery_status,
+        "redis": "configured" if os.getenv("REDIS_URL") else "not_configured"
     }
 
 
