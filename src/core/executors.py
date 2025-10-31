@@ -11,7 +11,7 @@ Executors handle:
 1. Context injection (serialize context as JSON, inject into code)
 2. Communication with E2B cloud sandbox
 3. Result parsing (extract updated context from output)
-4. Error handling and timeouts
+4. Error handling, timeouts, and circuit breaking
 """
 
 import json
@@ -19,12 +19,16 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import logging
 
+from .exceptions import (
+    ExecutorError,
+    E2BSandboxError,
+    E2BTimeoutError,
+    E2BConnectionError,
+    CodeExecutionError
+)
+from .circuit_breaker import e2b_circuit_breaker
+
 logger = logging.getLogger(__name__)
-
-
-class ExecutionError(Exception):
-    """Raised when code execution fails in the sandbox"""
-    pass
 
 
 class ExecutorStrategy(ABC):
@@ -34,7 +38,7 @@ class ExecutorStrategy(ABC):
     All executors must implement the execute() method which:
     - Takes code, context, and timeout
     - Returns updated context after execution
-    - Raises ExecutionError on failure
+    - Raises ExecutorError on failure
     """
 
     @abstractmethod
@@ -56,7 +60,7 @@ class ExecutorStrategy(ABC):
             Updated context after execution
 
         Raises:
-            ExecutionError: If execution fails
+            ExecutorError: If execution fails
         """
         pass
 
@@ -106,6 +110,11 @@ class E2BExecutor(ExecutorStrategy):
     Similar to Maisa's approach: code executes in a controlled environment
     with full auditability while having access to external services.
 
+    Features:
+    - Circuit breaker to prevent overload when E2B is down
+    - Automatic retry on transient failures
+    - Detailed error classification (timeout, connection, execution)
+
     Pricing:
     - Hobby tier: $100 free credits (good for ~7 months of development)
     - Usage: ~$0.03/second (2 vCPU + 512MB RAM)
@@ -140,7 +149,7 @@ class E2BExecutor(ExecutorStrategy):
 
     def _inject_context(self, code: str, context: Dict[str, Any]) -> str:
         """
-        Inject context into code (same as StaticExecutor).
+        Inject context into code.
 
         Args:
             code: Original Python code
@@ -177,7 +186,7 @@ print(json.dumps(context, ensure_ascii=True))
         timeout: int
     ) -> Dict[str, Any]:
         """
-        Execute code in E2B cloud sandbox.
+        Execute code in E2B cloud sandbox with circuit breaker protection.
 
         Args:
             code: Python code to execute
@@ -188,21 +197,59 @@ print(json.dumps(context, ensure_ascii=True))
             Updated context after execution
 
         Raises:
-            ExecutionError: If execution fails
+            E2BConnectionError: If circuit breaker is open or E2B unreachable
+            E2BTimeoutError: If execution exceeds timeout
+            CodeExecutionError: If user code has syntax/runtime errors
+            E2BSandboxError: If sandbox crashes or other E2B error
         """
-        from e2b_code_interpreter import Sandbox
-        import asyncio
+        # Check circuit breaker BEFORE attempting execution
+        if e2b_circuit_breaker.is_open():
+            error_msg = (
+                f"E2B circuit breaker is OPEN. "
+                f"Service experiencing issues. "
+                f"State: {e2b_circuit_breaker.get_status()}"
+            )
+            logger.error(error_msg)
+            raise E2BConnectionError(error_msg)
 
         # Inject context
         full_code = self._inject_context(code, context)
 
         logger.debug(f"Executing code in E2B sandbox (timeout: {timeout}s)")
         logger.debug(f"Code:\n{code}")
-        logger.debug(f"Context: {context}")
+        logger.debug(f"Context keys: {list(context.keys())}")
+        logger.debug(f"Circuit breaker state: {e2b_circuit_breaker.state}")
 
         # Run in executor since E2B v2.x SDK is synchronous
+        import asyncio
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._execute_sync, full_code, timeout)
+
+        try:
+            result = await loop.run_in_executor(None, self._execute_sync, full_code, timeout)
+
+            # Record success in circuit breaker
+            e2b_circuit_breaker.record_success()
+
+            return result
+
+        except (E2BSandboxError, E2BTimeoutError, E2BConnectionError, CodeExecutionError):
+            # These are already classified errors, just record failure
+            e2b_circuit_breaker.record_failure()
+            raise
+
+        except Exception as e:
+            # Unexpected error - classify and record
+            logger.exception(f"Unexpected E2B error: {e}")
+            e2b_circuit_breaker.record_failure()
+
+            # Try to classify the error
+            error_str = str(e).lower()
+            if "timeout" in error_str:
+                raise E2BTimeoutError(f"E2B timeout: {e}", timeout_seconds=timeout)
+            elif "connection" in error_str or "network" in error_str:
+                raise E2BConnectionError(f"E2B connection error: {e}")
+            else:
+                raise E2BSandboxError(f"E2B unexpected error: {e}")
 
     def _execute_sync(self, full_code: str, timeout: int) -> Dict[str, Any]:
         """
@@ -216,9 +263,14 @@ print(json.dumps(context, ensure_ascii=True))
             Updated context dictionary
 
         Raises:
-            ExecutionError: If execution fails
+            E2BConnectionError: Connection/API errors
+            E2BTimeoutError: Timeout errors
+            CodeExecutionError: User code errors (syntax, runtime)
+            E2BSandboxError: Other E2B errors
         """
         from e2b_code_interpreter import Sandbox
+
+        sandbox_id = None
 
         try:
             # Create sandbox - v2.x API is synchronous
@@ -229,52 +281,104 @@ print(json.dumps(context, ensure_ascii=True))
             if self.template:
                 create_kwargs["template"] = self.template
 
-            # Use context manager for automatic cleanup
-            with Sandbox.create(**create_kwargs) as sandbox:
-                # Execute code with timeout (synchronous in v2.x)
-                execution = sandbox.run_code(full_code, timeout=timeout)
+            logger.debug("Creating E2B sandbox...")
 
-                # Check for errors
-                if execution.error:
-                    error_msg = f"E2B execution error: {execution.error.name} - {execution.error.value}"
-                    logger.error(error_msg)
-                    raise ExecutionError(error_msg)
+            try:
+                # Use context manager for automatic cleanup
+                with Sandbox.create(**create_kwargs) as sandbox:
+                    sandbox_id = sandbox.id if hasattr(sandbox, 'id') else "unknown"
+                    logger.debug(f"E2B sandbox created: {sandbox_id}")
 
-                # Get output from stdout
-                # In v2.x, logs.stdout is a list of strings
-                stdout_lines = []
-                if hasattr(execution, 'logs') and execution.logs:
-                    if hasattr(execution.logs, 'stdout'):
-                        if isinstance(execution.logs.stdout, list):
-                            stdout_lines = [line.strip() for line in execution.logs.stdout if line.strip()]
-                        elif isinstance(execution.logs.stdout, str):
-                            stdout_lines = [line.strip() for line in execution.logs.stdout.split('\n') if line.strip()]
+                    # Execute code with timeout (synchronous in v2.x)
+                    logger.debug(f"Executing code in sandbox {sandbox_id} (timeout: {timeout}s)")
+                    execution = sandbox.run_code(full_code, timeout=timeout)
 
-                if not stdout_lines:
-                    raise ExecutionError("E2B sandbox returned empty output")
+                    # Check for errors
+                    if execution.error:
+                        error_name = execution.error.name if hasattr(execution.error, 'name') else "Error"
+                        error_value = execution.error.value if hasattr(execution.error, 'value') else str(execution.error)
 
-                # The last line should be our JSON output
-                output = stdout_lines[-1]
+                        error_msg = f"{error_name}: {error_value}"
 
-                # Parse updated context
-                try:
-                    updated_context = json.loads(output)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse E2B output as JSON: {output}")
+                        logger.error(f"E2B code execution error in sandbox {sandbox_id}: {error_msg}")
+
+                        # Classify user code errors vs sandbox errors
+                        if error_name in ("SyntaxError", "NameError", "TypeError", "ValueError", "AttributeError", "KeyError", "IndexError"):
+                            # User code error - don't retry
+                            raise CodeExecutionError(
+                                message=f"Code execution failed: {error_msg}",
+                                code=full_code,
+                                error_details=error_msg
+                            )
+                        else:
+                            # Sandbox error - retry
+                            raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
+
+                    # Get output from stdout
+                    # In v2.x, logs.stdout is a list of strings
+                    stdout_lines = []
                     if hasattr(execution, 'logs') and execution.logs:
-                        logger.error(f"Full stdout: {execution.logs.stdout}")
-                    raise ExecutionError(f"Invalid JSON in output: {e}")
+                        if hasattr(execution.logs, 'stdout'):
+                            if isinstance(execution.logs.stdout, list):
+                                stdout_lines = [line.strip() for line in execution.logs.stdout if line.strip()]
+                            elif isinstance(execution.logs.stdout, str):
+                                stdout_lines = [line.strip() for line in execution.logs.stdout.split('\n') if line.strip()]
 
-                logger.debug(f"E2B execution successful. Updated context: {updated_context}")
-                return updated_context
+                    if not stdout_lines:
+                        error_msg = f"E2B sandbox {sandbox_id} returned empty output"
+                        logger.error(error_msg)
+                        raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
+
+                    # The last line should be our JSON output
+                    output = stdout_lines[-1]
+
+                    # Parse updated context
+                    try:
+                        updated_context = json.loads(output)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse E2B output as JSON: {output}")
+                        if hasattr(execution, 'logs') and execution.logs:
+                            logger.error(f"Full stdout: {execution.logs.stdout}")
+
+                        # This is a user code error (didn't print valid JSON)
+                        raise CodeExecutionError(
+                            message=f"Code output is not valid JSON: {e}",
+                            code=full_code,
+                            error_details=f"Output: {output}"
+                        )
+
+                    logger.debug(f"E2B execution successful in sandbox {sandbox_id}")
+                    logger.debug(f"Updated context keys: {list(updated_context.keys())}")
+
+                    return updated_context
+
+            except TimeoutError as e:
+                # Sandbox creation or execution timeout
+                logger.error(f"E2B timeout: {e}")
+                raise E2BTimeoutError(f"E2B timeout after {timeout}s: {e}", timeout_seconds=timeout)
+
+            except ConnectionError as e:
+                # Network/connection error
+                logger.error(f"E2B connection error: {e}")
+                raise E2BConnectionError(f"E2B connection failed: {e}")
+
+        except (E2BConnectionError, E2BTimeoutError, CodeExecutionError, E2BSandboxError):
+            # Already classified - re-raise
+            raise
 
         except Exception as e:
-            if isinstance(e, ExecutionError):
-                raise
+            # Unexpected error
+            error_msg = f"E2B unexpected error in sandbox {sandbox_id or 'unknown'}: {e}"
+            logger.exception(error_msg)
 
-            error_msg = f"E2B sandbox error: {e}"
-            logger.error(error_msg)
-            raise ExecutionError(error_msg)
+            # Try to classify
+            error_str = str(e).lower()
+            if "timeout" in error_str:
+                raise E2BTimeoutError(error_msg, timeout_seconds=timeout)
+            elif "connection" in error_str or "network" in error_str or "api" in error_str:
+                raise E2BConnectionError(error_msg)
+            else:
+                raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
 
 
 def get_executor(
