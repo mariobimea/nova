@@ -193,3 +193,12 @@ logger.info("Celery app configured successfully")
 logger.info(f"Broker: {REDIS_URL.split('@')[1] if '@' in REDIS_URL else 'configured'}")
 logger.info(f"Default queue: workflows")
 logger.info(f"Task timeout: 600s (10 minutes)")
+
+# ============================================================================
+# IMPORT TASKS (so they get registered when worker starts)
+# ============================================================================
+# This import MUST come AFTER celery_app is configured
+# Otherwise tasks.py will import an unconfigured celery_app
+from . import tasks  # noqa: F401, E402
+
+logger.info("Tasks imported and registered")
