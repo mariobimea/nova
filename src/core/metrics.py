@@ -13,7 +13,7 @@ import logging
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, text
 
 from ..models.execution import Execution
 from ..models.workflow import Workflow
@@ -225,7 +225,7 @@ class MetricsCollector:
         try:
             start = time.time()
             # Simple query to check connectivity
-            self.db_session.execute("SELECT 1").fetchone()
+            self.db_session.execute(text("SELECT 1")).fetchone()
             response_time = round((time.time() - start) * 1000, 2)
 
             return {
