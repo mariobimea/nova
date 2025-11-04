@@ -328,6 +328,7 @@ def health_check(db: Session = Depends(get_db)):
         "status": "healthy",
         "database": db_status,
         "e2b": "configured" if os.getenv("E2B_API_KEY") else "not_configured",
+        "e2b_template_id": os.getenv("E2B_TEMPLATE_ID"),  # Show configured template ID
         "celery": celery_status,
         "redis": "configured" if os.getenv("REDIS_URL") else "not_configured"
     }
