@@ -15,6 +15,7 @@ Executors handle:
 """
 
 import json
+import os
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
 import logging
@@ -436,5 +437,8 @@ def get_executor(
         )
 
     # E2BExecutor requires api_key (or E2B_API_KEY env var)
-    # Use base template - dependencies will be installed in runtime if needed
-    return E2BExecutor(api_key=api_key)
+    # Use custom template with pre-installed packages for faster cold starts
+    # Template ID: j0hjup33shzpbnumir2w (NOVA Sandbox V2)
+    # Pre-installed: PyMuPDF, pandas, requests, pillow, psycopg2-binary, python-dotenv
+    template_id = os.getenv("E2B_TEMPLATE_ID", None)
+    return E2BExecutor(api_key=api_key, template=template_id)

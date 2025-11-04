@@ -1,0 +1,14 @@
+# NOVA Sandbox V2 Template
+# Optimized sandbox with pre-installed packages for faster cold starts
+#
+# Pre-installed packages:
+# - PyMuPDF (PDF processing)
+# - pandas (data manipulation)
+# - requests (HTTP calls)
+# - pillow (image processing)
+# - psycopg2-binary (PostgreSQL)
+# - python-dotenv (environment variables)
+
+team_id = "608eb540-d17b-4420-b632-6514e50a105d"
+dockerfile = "Dockerfile"
+template_id = "temp-build-id"
