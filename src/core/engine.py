@@ -318,7 +318,8 @@ class GraphEngine:
         self,
         workflow_definition: Dict[str, Any],
         initial_context: Optional[Dict[str, Any]] = None,
-        workflow_id: Optional[int] = None
+        workflow_id: Optional[int] = None,
+        execution_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Execute a complete workflow.
@@ -327,6 +328,7 @@ class GraphEngine:
             workflow_definition: Workflow JSON with nodes and edges
             initial_context: Initial context data (default: {})
             workflow_id: Workflow ID for persisting execution (required if db_session is set)
+            execution_id: Existing Execution ID to use (if provided, won't create new one)
 
         Returns:
             Execution result with:
@@ -342,9 +344,22 @@ class GraphEngine:
         """
         logger.info("Starting workflow execution")
 
-        # Create Execution record if persistence is enabled
+        # Get or create Execution record if persistence is enabled
         execution = None
-        if self.db_session and workflow_id:
+        if self.db_session and execution_id:
+            # Use existing execution (passed from worker)
+            from ..models.execution import Execution
+            execution = self.db_session.query(Execution).filter(
+                Execution.id == execution_id
+            ).first()
+
+            if execution:
+                logger.info(f"Using existing Execution record with ID: {execution.id}")
+            else:
+                logger.warning(f"Execution {execution_id} not found, proceeding without persistence")
+
+        elif self.db_session and workflow_id:
+            # Create new execution (standalone mode)
             from ..models.execution import Execution
             execution = Execution(
                 workflow_id=workflow_id,
@@ -353,7 +368,7 @@ class GraphEngine:
             )
             self.db_session.add(execution)
             self.db_session.commit()
-            logger.info(f"Created Execution record with ID: {execution.id}")
+            logger.info(f"Created new Execution record with ID: {execution.id}")
 
         # Parse and validate workflow
         nodes, edges = self._parse_workflow(workflow_definition)

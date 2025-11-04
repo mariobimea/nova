@@ -190,6 +190,7 @@ def execute_workflow_task(
                     workflow_definition=workflow.graph_definition,
                     initial_context=initial_context,
                     workflow_id=workflow.id,
+                    execution_id=execution.id  # Pass existing execution ID to avoid duplication
                 )
             )
 
