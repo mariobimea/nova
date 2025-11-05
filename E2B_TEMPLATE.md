@@ -4,9 +4,9 @@
 
 NOVA uses a custom E2B sandbox template optimized for workflow execution with pre-installed packages.
 
-**Template Name**: `nova-workflow-engine-v1`
-**Template ID**: `hylet6zk79e4aq58ytic`
-**Status**: ✅ Production Ready
+**Template Name**: `nova-workflow-fresh`
+**Template ID**: `wzqi57u2e8v2f90t6lh5`
+**Status**: ✅ Production Ready (November 2025)
 
 ---
 
@@ -44,8 +44,12 @@ Add to `.env`:
 
 ```bash
 E2B_API_KEY=e2b_a58171ddb2be1e03333222f77fa4bd1273e6f699
-E2B_TEMPLATE_ID=hylet6zk79e4aq58ytic
+E2B_TEMPLATE_ID=wzqi57u2e8v2f90t6lh5
 ```
+
+**Important for Railway**: Ensure BOTH services have this variable:
+- ✅ Web App (API)
+- ✅ Worker (Celery) - **CRITICAL**: Worker executes the code, must have template ID
 
 ### Executor Usage
 
@@ -84,14 +88,14 @@ RUN pip install --no-cache-dir \
 ### 2. Rebuild
 
 ```bash
-e2b template build --name "nova-workflow-engine-v1" -c "/root/.jupyter/start-up.sh"
+e2b template build --name "nova-workflow-fresh" -c "/root/.jupyter/start-up.sh"
 ```
 
 **Important**: Always include the `-c "/root/.jupyter/start-up.sh"` flag for code interpreter compatibility.
 
 ### 3. Template ID remains the same
 
-The template ID (`hylet6zk79e4aq58ytic`) remains constant across builds. No need to update `.env`.
+The template ID (`wzqi57u2e8v2f90t6lh5`) remains constant across builds. E2B will update the template in-place without changing the ID.
 
 ---
 
@@ -107,7 +111,7 @@ Expected output:
 
 ```
 ✅ E2B_API_KEY: e2b_a58171...
-✅ E2B_TEMPLATE_ID: hylet6zk79e4aq58ytic
+✅ E2B_TEMPLATE_ID: wzqi57u2e8v2f90t6lh5
 
 🚀 Creating E2BExecutor...
 
@@ -127,6 +131,20 @@ Expected output:
 ============================================================
 ✅ Template test PASSED - Ready for production!
 ============================================================
+```
+
+### Test in Railway (Production)
+
+To test the template in production, execute the test workflow:
+
+```bash
+curl -X POST 'https://your-railway-url.railway.app/workflows/2/execute' -H 'Content-Type: application/json' -d '{}'
+```
+
+Check results after 10 seconds:
+
+```bash
+curl 'https://your-railway-url.railway.app/tasks/{task-id}'
 ```
 
 ---
@@ -149,23 +167,35 @@ Expected output:
 **Solution**: Ensure you rebuilt with the start command:
 
 ```bash
-e2b template build --name "nova-workflow-engine-v1" -c "/root/.jupyter/start-up.sh"
+e2b template build --name "nova-workflow-fresh" -c "/root/.jupyter/start-up.sh"
 ```
 
-### Packages missing
+### Packages missing in Railway but work locally
 
-**Symptom**: `ImportError: No module named 'xyz'`
+**Symptom**: Local tests pass but Railway shows `ImportError: No module named 'xyz'`
+
+**Root Cause**: Worker service missing `E2B_TEMPLATE_ID` environment variable.
+
+**Solution**:
+1. Go to Railway → Worker service → Variables
+2. Add `E2B_TEMPLATE_ID=wzqi57u2e8v2f90t6lh5`
+3. Redeploy Worker
+4. **Why**: The Worker (Celery) executes workflows, not the API. Both services need the template ID.
+
+### Packages missing (template issue)
+
+**Symptom**: `ImportError: No module named 'xyz'` everywhere (local + Railway)
 
 **Solution**: Add the package to `e2b.Dockerfile` and rebuild.
 
 ### Template list shows wrong name
 
-**Symptom**: Template appears with generic name instead of `nova-workflow-engine-v1`
+**Symptom**: Template appears with generic name instead of `nova-workflow-fresh`
 
 **Solution**: Use `--name` flag during build:
 
 ```bash
-e2b template build --name "nova-workflow-engine-v1" -c "/root/.jupyter/start-up.sh"
+e2b template build --name "nova-workflow-fresh" -c "/root/.jupyter/start-up.sh"
 ```
 
 ---
@@ -182,16 +212,15 @@ e2b template build --name "nova-workflow-engine-v1" -c "/root/.jupyter/start-up.
 
 ## Migration Notes
 
-### From Multiple Templates
+### Template History
 
-Previously, NOVA had 3 separate template directories:
-- `nova-invoice/` (Public, ID: j0hjup33shzpbnumir2w)
-- `nova-sandbox/` (Private, ID: izvjugmy05jeo0vwg755)
-- `nova-sandbox-v2/` (duplicate ID)
+**November 2025**: `nova-workflow-fresh` (wzqi57u2e8v2f90t6lh5) - Current production template
+**October 2025**: `nova-workflow-engine-v1/v2/v3` (hylet6zk79e4aq58ytic) - Deprecated (caching issues)
+**Earlier**: Multiple separate templates (j0hjup33shzpbnumir2w, izvjugmy05jeo0vwg755)
 
-**Now**: Single unified template `nova-workflow-engine-v1` in project root.
+**Current**: Single unified template `nova-workflow-fresh` in project root.
 
-**Backups**: Old configurations saved in `.backup/e2b-templates-*/`
+**Why new template**: Previous template ID had E2B caching issues. Creating a completely new template with fresh ID resolved package availability problems.
 
 ---
 
@@ -203,4 +232,4 @@ Previously, NOVA had 3 separate template directories:
 
 ---
 
-Last updated: 2025-11-04
+Last updated: 2025-11-05

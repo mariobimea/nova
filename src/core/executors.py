@@ -438,7 +438,8 @@ def get_executor(
 
     # E2BExecutor requires api_key (or E2B_API_KEY env var)
     # Use custom template with pre-installed packages for faster cold starts
-    # Template ID: j0hjup33shzpbnumir2w (NOVA Sandbox V2)
+    # Template: nova-workflow-fresh (wzqi57u2e8v2f90t6lh5)
     # Pre-installed: PyMuPDF, pandas, requests, pillow, psycopg2-binary, python-dotenv
+    # IMPORTANT: Ensure E2B_TEMPLATE_ID is set in BOTH API and Worker services (Railway)
     template_id = os.getenv("E2B_TEMPLATE_ID", None)
     return E2BExecutor(api_key=api_key, template=template_id)

@@ -49,9 +49,12 @@ REDIS_URL=redis://...
 
 # E2B Sandbox (FREE)
 E2B_API_KEY=e2b_...tu_api_key_aqui
+E2B_TEMPLATE_ID=wzqi57u2e8v2f90t6lh5
 ```
 
 **Importante**: E2B es **obligatorio**. Sin API key, NOVA no puede ejecutar workflows.
+
+**Railway Users**: Ensure BOTH services (Web + Worker) have `E2B_TEMPLATE_ID` configured.
 
 ### 4. Verificar E2B funciona
 
