@@ -289,7 +289,16 @@ class GraphEngine:
                 if ai_metadata:
                     metadata["ai_metadata"] = ai_metadata
 
-                context.update(updated_context)
+                # Check if result has E2B format wrapper (context_updates)
+                # This happens when AI-generated code prints structured JSON
+                if "context_updates" in updated_context:
+                    # Extract the actual updates from the wrapper
+                    actual_updates = updated_context.get("context_updates", {})
+                    context.update(actual_updates)
+                else:
+                    # Traditional format - update directly
+                    context.update(updated_context)
+
                 metadata["code_executed"] = code_or_prompt
 
             elif isinstance(node, DecisionNode):
@@ -327,7 +336,16 @@ class GraphEngine:
                 if ai_metadata:
                     metadata["ai_metadata"] = ai_metadata
 
-                context.update(updated_context)
+                # Check if result has E2B format wrapper (context_updates)
+                # This happens when AI-generated code prints structured JSON
+                if "context_updates" in updated_context:
+                    # Extract the actual updates from the wrapper
+                    actual_updates = updated_context.get("context_updates", {})
+                    context.update(actual_updates)
+                else:
+                    # Traditional format - update directly
+                    context.update(updated_context)
+
                 metadata["code_executed"] = code_or_prompt
 
                 # Extract decision result
