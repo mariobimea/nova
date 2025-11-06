@@ -28,6 +28,7 @@ from .exceptions import (
     CodeExecutionError
 )
 from .circuit_breaker import e2b_circuit_breaker
+from .context_validator import is_json_serializable, get_context_stats
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +413,42 @@ class CachedExecutor(ExecutorStrategy):
                     timeout=timeout
                 )
                 execution_time_ms = int((time.time() - execution_start) * 1000)
+
+                # 3.5. Validate that result is JSON-serializable
+                # This prevents storing complex objects (email.Message, file handles, etc.)
+                # If validation fails, we'll retry with error feedback to the AI
+                is_serializable, serialization_error = is_json_serializable(result)
+
+                if not is_serializable:
+                    # Get detailed stats about what's wrong
+                    stats = get_context_stats(result)
+                    problematic_keys = [
+                        f"{item['key']} ({item['type']})"
+                        for item in stats.get('problematic_details', [])
+                    ]
+
+                    error_message = (
+                        f"Generated code produced non-JSON-serializable output: {serialization_error}\n"
+                        f"Problematic keys: {', '.join(problematic_keys)}\n\n"
+                        f"Remember: Context must only contain JSON-serializable types:\n"
+                        f"  ✅ Allowed: str, int, float, bool, None, list, dict\n"
+                        f"  ❌ Not allowed: email.Message, file handles, custom objects\n\n"
+                        f"Example FIX:\n"
+                        f"  ❌ context['email_obj'] = msg  # msg is email.Message\n"
+                        f"  ✅ context['email_from'] = msg.get('From')  # Extract string instead"
+                    )
+
+                    logger.warning(
+                        f"❌ Serialization validation failed on attempt {attempt}/3: "
+                        f"{', '.join(problematic_keys)}"
+                    )
+
+                    # Raise as CodeExecutionError to trigger retry
+                    raise CodeExecutionError(
+                        message=error_message,
+                        code=generated_code,
+                        error_details=f"Problematic keys: {', '.join(problematic_keys)}"
+                    )
 
                 # 4. Success! Add AI metadata
                 total_time_ms = int((time.time() - total_start_time) * 1000)

@@ -128,6 +128,98 @@ except Exception as e:
 
 **Why**: If code crashes without exception handling, the entire workflow stops. With try/except, we return a controlled error that the workflow can handle.
 
+### JSON Serialization Rules ⚠️ CRITICAL
+
+**CRITICAL RULE**: All values in `context_updates` MUST be JSON-serializable.
+
+**✅ ALLOWED Types** (Safe to use in context):
+- `str` - Strings: `"hello"`
+- `int` - Integers: `42`
+- `float` - Floats: `3.14`
+- `bool` - Booleans: `True`, `False`
+- `None` - Null values
+- `list` - Lists/Arrays: `[1, 2, 3]`
+- `dict` - Dictionaries/Objects: `{"key": "value"}`
+
+**❌ NOT ALLOWED** (Will cause workflow to fail):
+- `email.Message` objects - Parse and extract string fields instead
+- `file` handles - Close files and store paths as strings
+- `psycopg2.connection` objects - Close connections, don't store them
+- Custom class instances - Convert to dict or extract primitive values
+- `datetime` objects - Convert to ISO string: `datetime.now().isoformat()`
+- `bytes` objects - Encode to base64 string first
+- `set` objects - Convert to list: `list(my_set)`
+
+### ❌ WRONG Example - Storing Complex Objects
+
+```python
+import email
+import imaplib
+
+# Read email
+mail = imaplib.IMAP4_SSL('imap.gmail.com')
+status, data = mail.fetch(email_id, '(RFC822)')
+msg = email.message_from_bytes(data[0][1])
+
+# ❌ THIS WILL FAIL - email.Message is not JSON-serializable
+print(json.dumps({
+    "status": "success",
+    "context_updates": {
+        "email_message_obj": msg  # ❌ WRONG! Cannot serialize email.Message
+    }
+}))
+# Error: Object of type 'Message' is not JSON serializable
+```
+
+### ✅ CORRECT Example - Extract Primitive Values
+
+```python
+import email
+import imaplib
+
+# Read email
+mail = imaplib.IMAP4_SSL('imap.gmail.com')
+status, data = mail.fetch(email_id, '(RFC822)')
+msg = email.message_from_bytes(data[0][1])
+
+# ✅ EXTRACT strings from the Message object
+email_from = msg.get('From', '')       # ✅ String
+email_subject = msg.get('Subject', '') # ✅ String
+email_date = msg.get('Date', '')       # ✅ String
+
+# Extract body as string
+body = ""
+if msg.is_multipart():
+    for part in msg.walk():
+        if part.get_content_type() == "text/plain":
+            body = part.get_payload(decode=True).decode('utf-8', errors='ignore')
+            break
+else:
+    body = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
+
+# ✅ THIS WORKS - All values are JSON-serializable
+print(json.dumps({
+    "status": "success",
+    "context_updates": {
+        "email_from": email_from,      # ✅ String
+        "email_subject": email_subject, # ✅ String
+        "email_date": email_date,       # ✅ String
+        "email_body": body              # ✅ String
+    }
+}))
+```
+
+### Why This Matters
+
+The workflow engine stores context in a PostgreSQL database as JSON. If you try to store non-serializable objects:
+
+1. The code will execute successfully in the sandbox
+2. But when saving to the database, it will fail with serialization error
+3. The workflow will retry (up to 3 times) with error feedback
+4. **After 3 failed attempts, the workflow stops**
+
+**Solution**: Always extract primitive values (strings, numbers, booleans) from complex objects.
+
 ### Best Practices
 
 **DO**:
@@ -135,12 +227,15 @@ except Exception as e:
 - ✅ Validate input data before processing
 - ✅ Use timeouts for external API calls
 - ✅ Return structured, JSON-serializable data
+- ✅ Extract primitive values from complex objects (email, database connections, etc.)
 - ✅ Use `.get()` with defaults when accessing dict keys
 - ✅ Add helpful error messages
-- ✅ Use type hints in function definitions (optional but recommended)
+- ✅ Convert datetime to ISO string: `datetime.now().isoformat()`
+- ✅ Encode bytes to base64 string: `base64.b64encode(data).decode('utf-8')`
 
 **DON'T**:
 - ❌ Use libraries not listed in pre-installed packages
+- ❌ Store complex Python objects in context (email.Message, file handles, connections)
 - ❌ Write infinite loops or recursive functions without limits
 - ❌ Make assumptions about data structure without validation
 - ❌ Access file paths outside `/tmp/`
