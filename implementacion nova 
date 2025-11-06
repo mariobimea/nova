@@ -1,0 +1,27 @@
+Phase 1 (MVP) - Lo que vamos a hacer AHORA:
+Knowledge System:
+✅ Crear /nova/knowledge/main.md
+✅ Crear /nova/knowledge/integrations/ con docs básicas
+✅ Crear /nova/knowledge/libraries/ con docs básicas
+KnowledgeManager:
+✅ Clase que carga markdown files
+✅ Detección automática de integraciones (rule-based)
+✅ Construcción de prompt completo
+CachedExecutor:
+✅ Implementar como ExecutorStrategy
+✅ Integración con OpenAI API
+✅ Retry logic con error feedback (max 3)
+✅ Usar E2BExecutor para ejecutar código generado
+Testing:
+✅ Test con workflow de facturas (caso real)
+✅ Validar que genera código correcto
+✅ Validar retry funciona
+Monitoring:
+✅ Trackear tokens usados
+✅ Trackear intentos antes de success
+✅ Guardar código generado en Chain of Work
+Phase 2 (Futuro) - NO lo hacemos ahora:
+❌ Cache hash-based
+❌ Semantic cache con embeddings
+❌ RAG para library docs
+❌ Human-in-the-loop approval

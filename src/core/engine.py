@@ -284,10 +284,21 @@ class GraphEngine:
                     timeout=node.timeout
                 )
 
+                # DEBUG: Log what executor returned
+                logger.info(f"🔍 DEBUG after executor.execute() for node {node.id}:")
+                logger.info(f"   Executor type: {node.executor}")
+                logger.info(f"   updated_context keys: {list(updated_context.keys())}")
+                logger.info(f"   Has _ai_metadata: {'_ai_metadata' in updated_context}")
+                if "_ai_metadata" in updated_context:
+                    logger.info(f"   _ai_metadata present: {updated_context['_ai_metadata']}")
+
                 # Extract AI metadata if present (only for CachedExecutor)
                 ai_metadata = updated_context.pop("_ai_metadata", None)
                 if ai_metadata:
+                    logger.info(f"✅ AI metadata extracted and will be saved to chain_of_work")
                     metadata["ai_metadata"] = ai_metadata
+                else:
+                    logger.info(f"⚠️  No AI metadata found in updated_context (executor: {node.executor})")
 
                 # Check if result has E2B format wrapper (context_updates)
                 # This happens when AI-generated code prints structured JSON

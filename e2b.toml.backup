@@ -1,0 +1,17 @@
+# This is a config for E2B sandbox template.
+# You can use template ID (hylet6zk79e4aq58ytic) or template name (nova-workflow-engine-v3) to create a sandbox:
+
+# Python SDK
+# from e2b import Sandbox, AsyncSandbox
+# sandbox = Sandbox.create("nova-workflow-engine-v3") # Sync sandbox
+# sandbox = await AsyncSandbox.create("nova-workflow-engine-v3") # Async sandbox
+
+# JS SDK
+# import { Sandbox } from 'e2b'
+# const sandbox = await Sandbox.create('nova-workflow-engine-v3')
+
+team_id = "608eb540-d17b-4420-b632-6514e50a105d"
+start_cmd = "/root/.jupyter/start-up.sh"
+dockerfile = "e2b.Dockerfile"
+template_name = "nova-workflow-engine-v3"
+template_id = "hylet6zk79e4aq58ytic"
