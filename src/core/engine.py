@@ -310,7 +310,12 @@ class GraphEngine:
                     # Traditional format - update directly
                     context.update(updated_context)
 
-                metadata["code_executed"] = code_or_prompt
+                # Store actual executed code (not prompt)
+                # If AI generated code, use that. Otherwise use the prompt/code as-is
+                if ai_metadata and "generated_code" in ai_metadata:
+                    metadata["code_executed"] = ai_metadata["generated_code"]
+                else:
+                    metadata["code_executed"] = code_or_prompt
 
             elif isinstance(node, DecisionNode):
                 # DecisionNode: Execute code or prompt for decision, read result, store for branching
@@ -357,7 +362,12 @@ class GraphEngine:
                     # Traditional format - update directly
                     context.update(updated_context)
 
-                metadata["code_executed"] = code_or_prompt
+                # Store actual executed code (not prompt)
+                # If AI generated code, use that. Otherwise use the prompt/code as-is
+                if ai_metadata and "generated_code" in ai_metadata:
+                    metadata["code_executed"] = ai_metadata["generated_code"]
+                else:
+                    metadata["code_executed"] = code_or_prompt
 
                 # Extract decision result
                 decision_result = context.get("branch_decision")
