@@ -140,7 +140,9 @@ class CachedExecutor(ExecutorStrategy):
             )
 
         # Initialize E2B executor (for code execution)
-        self.e2b_executor = E2BExecutor()
+        # Use custom template if E2B_TEMPLATE_ID is set
+        template_id = os.getenv("E2B_TEMPLATE_ID")
+        self.e2b_executor = E2BExecutor(template=template_id)
 
         # Initialize Knowledge Manager (for prompt building)
         self.knowledge_manager = KnowledgeManager()
