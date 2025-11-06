@@ -27,3 +27,6 @@ pytest-asyncio==0.24.0
 
 # Code Execution Sandbox
 e2b-code-interpreter==2.2.1
+
+# AI Code Generation
+openai==1.54.4
