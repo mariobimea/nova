@@ -806,7 +806,7 @@ print(json.dumps(context, ensure_ascii=True))
 
                     # Parse updated context
                     try:
-                        updated_context = json.loads(output)
+                        output_json = json.loads(output)
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse E2B output as JSON: {output}")
                         if hasattr(execution, 'logs') and execution.logs:
@@ -818,6 +818,27 @@ print(json.dumps(context, ensure_ascii=True))
                             code=full_code,
                             error_details=f"Output: {output}"
                         )
+
+                    # Check if output has the expected structure: {status, context_updates, message}
+                    # If it does, extract context_updates. Otherwise, use the whole JSON as context.
+                    if isinstance(output_json, dict) and "context_updates" in output_json:
+                        # AI-generated code format: {status, context_updates, message}
+                        updated_context = output_json.get("context_updates", {})
+
+                        # Log status and message if present
+                        status = output_json.get("status")
+                        message = output_json.get("message")
+                        if status:
+                            logger.debug(f"Execution status: {status}")
+                        if message:
+                            logger.debug(f"Execution message: {message}")
+
+                        # If status is "error", log it but still return context_updates
+                        if status == "error":
+                            logger.warning(f"Code reported error status: {message}")
+                    else:
+                        # Legacy format or direct context update
+                        updated_context = output_json
 
                     logger.debug(f"E2B execution successful in sandbox {sandbox_id}")
                     logger.debug(f"Updated context keys: {list(updated_context.keys())}")
