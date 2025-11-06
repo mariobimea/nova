@@ -1,0 +1,102 @@
+{
+  "name": "Invoice Processing AI",
+  "description": "AI-powered workflow: Process invoices from email with PDF attachments using dynamic code generation",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "label": "Start"
+    },
+    {
+      "id": "read_email_metadata",
+      "type": "action",
+      "label": "Read Email from IMAP",
+      "executor": "cached",
+      "prompt": "Connect to the IMAP server and read the first unread email.\n\nInput from context:\n- context['imap_host'] - IMAP server hostname\n- context['imap_port'] - IMAP server port\n- context['email_user'] - email account username\n- context['email_password'] - email account password\n- context['sender_whitelist'] - (optional) only read emails from this sender\n\nTasks:\n1. Connect to IMAP server using SSL (imaplib.IMAP4_SSL)\n2. Login with credentials\n3. Select INBOX folder\n4. Search for unread emails (if sender_whitelist provided, filter by FROM)\n5. If no emails found:\n   - Set context['has_emails'] = False\n   - Logout and finish\n6. If email found:\n   - Fetch the first unread email\n   - Parse the email message\n   - Extract: From, Subject, Date headers\n   - Store the parsed email.Message object for later use\n   - Mark email as read (add \\Seen flag)\n   - Logout from IMAP\n\nOutput to context:\n- context['has_emails'] = True/False\n- context['email_from'] = sender email (str)\n- context['email_subject'] = subject line (str)\n- context['email_date'] = date header (str)\n- context['email_message_obj'] = parsed email.Message object\n- context['passes_whitelist'] = True/False\n\nUse Python's imaplib and email libraries.",
+      "timeout": 30
+    },
+    {
+      "id": "extract_pdf_attachment",
+      "type": "action",
+      "label": "Extract PDF Attachment",
+      "executor": "cached",
+      "prompt": "Extract the PDF attachment from the email message.\n\nInput from context:\n- context['email_message_obj'] - parsed email.Message object\n- context['has_emails'] - whether we have an email to process\n\nTask:\nIf has_emails is False, skip processing and set has_pdf to False.\nOtherwise, find any PDF attachment in the email (file ending with .pdf), extract its bytes, encode to base64, and store it along with the filename.\n\nOutput to context:\n- context['has_pdf'] = True/False\n- context['pdf_data_b64'] = base64-encoded PDF bytes (str) [if found]\n- context['pdf_filename'] = PDF filename (str) [if found]\n\nUse Python's email and base64 libraries.",
+      "timeout": 30
+    },
+    {
+      "id": "has_pdf_decision",
+      "type": "decision",
+      "label": "Has PDF?",
+      "executor": "cached",
+      "prompt": "Decide if the email has a PDF attachment.\n\nInput from context:\n- context['has_pdf'] - whether a PDF was found\n\nTask:\nSet context['branch_decision'] to True if a PDF was found, False otherwise.\n\nOutput to context:\n- context['branch_decision'] = True/False",
+      "timeout": 5
+    },
+    {
+      "id": "send_rejection_email",
+      "type": "action",
+      "label": "Send Rejection Email",
+      "executor": "cached",
+      "prompt": "Send a rejection email to the sender because the email doesn't contain a PDF attachment.\n\nInput from context:\n- context['email_from'] - recipient email\n- context['email_subject'] - original subject\n- context['email_user'] - our email account\n- context['email_password'] - email password\n- context['smtp_host'] - SMTP server\n- context['smtp_port'] - SMTP port\n\nTask:\nSend an email with this exact message:\n\nSubject: Re: {original subject} - Email Rechazado\n\nBody:\nHola,\n\nHemos recibido tu email pero no contiene un archivo PDF adjunto.\n\nPor favor, reenvía el email con la factura en formato PDF.\n\nGracias,\nEquipo IDOM\n\nConnect to SMTP server, use TLS encryption, login, send the email, and quit.\n\nOutput to context:\n- context['rejection_sent'] = True\n\nUse Python's smtplib and email.mime.text libraries.",
+      "timeout": 30
+    },
+    {
+      "id": "extract_text_from_pdf",
+      "type": "action",
+      "label": "Extract Text from PDF",
+      "executor": "cached",
+      "prompt": "Extract all text content from the PDF file.\n\nInput from context:\n- context['pdf_data_b64'] - base64-encoded PDF bytes\n\nTasks:\n- Decode the PDF from base64 to bytes\n- Extract text from all pages of the PDF\n- Clean any control characters that could break JSON serialization\n- Calculate the PDF size in bytes\n\nOutput to context:\n- context['ocr_text'] = extracted and cleaned text (str)\n- context['pdf_size_bytes'] = PDF size in bytes (int)\n\nUse PyMuPDF (fitz) library for PDF processing.",
+      "timeout": 60
+    },
+    {
+      "id": "find_total_amount",
+      "type": "action",
+      "label": "Find Total Amount",
+      "executor": "cached",
+      "prompt": "Find the total invoice amount from the extracted text.\n\nInput from context:\n- context['ocr_text'] - text extracted from PDF invoice\n\nTask:\nAnalyze the text and identify the total amount of the invoice.\n\nOutput to context:\n- context['total_amount'] = extracted amount as float (e.g., 1234.56)\n\nIf you cannot find a clear total amount, set it to 0.0",
+      "timeout": 30
+    },
+    {
+      "id": "amount_decision",
+      "type": "decision",
+      "label": "Amount > €1000?",
+      "executor": "cached",
+      "prompt": "Decide if the invoice amount exceeds the approval threshold.\n\nInput from context:\n- context['total_amount'] - invoice amount in euros\n\nTask:\nSet context['branch_decision'] to True if the amount is greater than 1000 euros, False otherwise.\n\nOutput to context:\n- context['branch_decision'] = True/False",
+      "timeout": 5
+    },
+    {
+      "id": "send_high_budget_email",
+      "type": "action",
+      "label": "Send High Budget Email",
+      "executor": "cached",
+      "prompt": "Send an email notifying that the invoice amount exceeds the automatic approval threshold.\n\nInput from context:\n- context['email_from'] - recipient email\n- context['email_subject'] - original subject\n- context['total_amount'] - invoice amount\n- context['email_user'] - our email account\n- context['email_password'] - email password\n- context['smtp_host'] - SMTP server\n- context['smtp_port'] - SMTP port\n\nTask:\nSend an email with this exact message:\n\nSubject: Re: {original subject} - Presupuesto Alto\n\nBody:\nHola,\n\nHemos recibido tu factura por un importe de €{amount:.2f}.\n\nEste importe supera el límite de aprobación automática (€1000).\nUn miembro del equipo la revisará pronto.\n\nGracias,\nEquipo IDOM\n\nConnect to SMTP, use TLS, login, send, and quit.\n\nOutput to context:\n- context['high_budget_sent'] = True\n\nUse Python's smtplib and email.mime.text libraries.",
+      "timeout": 30
+    },
+    {
+      "id": "save_invoice_to_db",
+      "type": "action",
+      "label": "Save Invoice to Database",
+      "executor": "cached",
+      "prompt": "Save the invoice data to the PostgreSQL database.\n\nInput from context:\n- context['email_from'] - sender email\n- context['email_subject'] - email subject\n- context['pdf_filename'] - PDF filename\n- context['pdf_data_b64'] - base64-encoded PDF\n- context['pdf_size_bytes'] - PDF size\n- context['ocr_text'] - extracted text\n- context['total_amount'] - invoice amount\n- context['db_host'] - PostgreSQL host\n- context['db_port'] - PostgreSQL port\n- context['db_name'] - database name\n- context['db_user'] - database user\n- context['db_password'] - database password\n\nTask:\nInsert a new invoice record into the 'invoices' table with these columns:\n- email_from, email_subject, pdf_filename\n- pdf_content (bytea - decode PDF from base64)\n- pdf_size_bytes, ocr_text\n- ocr_method (set to 'pymupdf')\n- total_amount, currency (set to 'EUR')\n\nReturn the inserted invoice ID.\n\nOutput to context:\n- context['invoice_id'] = ID of inserted invoice (int)\n- context['invoice_saved'] = True\n\nUse psycopg2 library for PostgreSQL connection.",
+      "timeout": 60
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "label": "End"
+    }
+  ],
+  "edges": [
+    {"from": "start", "to": "read_email_metadata"},
+    {"from": "read_email_metadata", "to": "extract_pdf_attachment"},
+    {"from": "extract_pdf_attachment", "to": "has_pdf_decision"},
+    {"from": "has_pdf_decision", "to": "send_rejection_email", "condition": "false"},
+    {"from": "has_pdf_decision", "to": "extract_text_from_pdf", "condition": "true"},
+    {"from": "send_rejection_email", "to": "end"},
+    {"from": "extract_text_from_pdf", "to": "find_total_amount"},
+    {"from": "find_total_amount", "to": "amount_decision"},
+    {"from": "amount_decision", "to": "send_high_budget_email", "condition": "true"},
+    {"from": "amount_decision", "to": "save_invoice_to_db", "condition": "false"},
+    {"from": "send_high_budget_email", "to": "end"},
+    {"from": "save_invoice_to_db", "to": "end"}
+  ]
+}

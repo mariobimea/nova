@@ -68,18 +68,413 @@ class ExecutorStrategy(ABC):
 
 class CachedExecutor(ExecutorStrategy):
     """
-    Phase 2: Reuses cached successful code or generates with AI if cache miss.
+    AI-Powered Executor: Generates Python code dynamically using OpenAI GPT-4o-mini.
 
-    NOT IMPLEMENTED YET - Placeholder for Phase 2.
+    This executor:
+    1. Takes a natural language prompt (instead of hardcoded code)
+    2. Uses KnowledgeManager to build a complete prompt with integration docs
+    3. Generates Python code using OpenAI API
+    4. Validates and executes the code in E2B sandbox
+    5. Retries up to 3 times with error feedback if generation/execution fails
+    6. Returns results with AI metadata (tokens, cost, attempts, etc.)
+
+    Example usage:
+        executor = CachedExecutor()
+        result = await executor.execute(
+            code="Extract total amount from invoice PDF",  # Natural language prompt
+            context={"pdf_path": "/tmp/invoice.pdf"},
+            timeout=30
+        )
+        # result = {
+        #     "total_amount": "$1,234.56",
+        #     "_ai_metadata": {
+        #         "model": "gpt-4o-mini",
+        #         "generated_code": "import fitz\n...",
+        #         "tokens_input": 7000,
+        #         "tokens_output": 450,
+        #         "cost_usd": 0.0012,
+        #         "attempts": 1
+        #     }
+        # }
+
+    Pricing (OpenAI gpt-4o-mini):
+    - Input: $0.15 / 1M tokens (~$0.0015 per 10K tokens)
+    - Output: $0.60 / 1M tokens (~$0.0060 per 10K tokens)
+    - Typical cost per generation: $0.001 - $0.002 (very cheap!)
+
+    Phase 1 MVP: No cache (generates fresh code every time)
+    Phase 2: Hash-based cache + semantic cache with embeddings
     """
+
+    def __init__(self, db_session: Optional[Any] = None):
+        """
+        Initialize CachedExecutor.
+
+        Args:
+            db_session: Optional SQLAlchemy session for cache lookups (Phase 2).
+                       Currently unused in Phase 1 (no cache implementation yet).
+
+        Requires OPENAI_API_KEY environment variable.
+        """
+        import os
+        from .ai.knowledge_manager import KnowledgeManager
+
+        # Store db_session for future cache implementation (Phase 2)
+        self.db_session = db_session
+
+        # Initialize OpenAI client
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "OPENAI_API_KEY environment variable is required for CachedExecutor. "
+                "Get API key at: https://platform.openai.com/api-keys"
+            )
+
+        try:
+            import openai
+            self.openai_client = openai.OpenAI(api_key=api_key)
+        except ImportError:
+            raise ImportError(
+                "OpenAI library not installed. Install with: pip install openai"
+            )
+
+        # Initialize E2B executor (for code execution)
+        self.e2b_executor = E2BExecutor()
+
+        # Initialize Knowledge Manager (for prompt building)
+        self.knowledge_manager = KnowledgeManager()
+
+        logger.info("CachedExecutor initialized with OpenAI gpt-4o-mini")
+
+    def _clean_code_blocks(self, code: str) -> str:
+        """
+        Remove markdown code blocks and explanations from AI-generated code.
+
+        OpenAI often wraps code in ```python ... ``` blocks and adds
+        explanatory text before/after. This function extracts just the code.
+
+        Args:
+            code: Raw output from OpenAI API
+
+        Returns:
+            Clean Python code without markdown or explanations
+        """
+        import re
+
+        # Remove markdown code blocks
+        # Pattern: ```python\ncode\n``` or ```\ncode\n```
+        code_block_pattern = r'```(?:python)?\s*\n(.*?)\n```'
+        matches = re.findall(code_block_pattern, code, re.DOTALL)
+
+        if matches:
+            # Take the first code block
+            code = matches[0]
+
+        # Remove common explanatory phrases at start/end
+        lines = code.split('\n')
+        cleaned_lines = []
+
+        for line in lines:
+            stripped = line.strip().lower()
+
+            # Skip explanation lines
+            if any(phrase in stripped for phrase in [
+                "here's the code",
+                "here is the code",
+                "this code will",
+                "the code above",
+                "explanation:",
+                "note:",
+            ]):
+                continue
+
+            cleaned_lines.append(line)
+
+        return '\n'.join(cleaned_lines).strip()
+
+    def _validate_syntax(self, code: str) -> None:
+        """
+        Validate Python syntax using ast.parse().
+
+        Args:
+            code: Python code to validate
+
+        Raises:
+            CodeExecutionError: If syntax is invalid
+        """
+        import ast
+
+        try:
+            ast.parse(code)
+        except SyntaxError as e:
+            raise CodeExecutionError(
+                message=f"Generated code has invalid syntax: {e}",
+                code=code,
+                error_details=str(e)
+            )
+
+    def _estimate_tokens(self, prompt: str, code: str) -> Dict[str, Any]:
+        """
+        Estimate token usage and cost.
+
+        Uses simple estimation: ~4 characters = 1 token
+        (Actual tokenization is more complex, but this is close enough)
+
+        OpenAI gpt-4o-mini pricing (as of Nov 2024):
+        - Input: $0.15 / 1M tokens
+        - Output: $0.60 / 1M tokens
+
+        Args:
+            prompt: Input prompt sent to OpenAI
+            code: Generated code from OpenAI
+
+        Returns:
+            Dictionary with token counts and estimated cost
+        """
+        # Simple estimation: ~4 chars per token
+        input_tokens = len(prompt) // 4
+        output_tokens = len(code) // 4
+
+        # gpt-4o-mini pricing (per 1M tokens)
+        input_cost_per_1m = 0.15
+        output_cost_per_1m = 0.60
+
+        # Calculate cost in USD
+        input_cost = (input_tokens / 1_000_000) * input_cost_per_1m
+        output_cost = (output_tokens / 1_000_000) * output_cost_per_1m
+        total_cost = input_cost + output_cost
+
+        return {
+            "tokens_input": input_tokens,
+            "tokens_output": output_tokens,
+            "tokens_total": input_tokens + output_tokens,
+            "cost_usd": round(total_cost, 6)  # Round to 6 decimals ($0.000001)
+        }
+
+    async def _generate_code(self, prompt: str) -> str:
+        """
+        Generate Python code using OpenAI API.
+
+        Args:
+            prompt: Complete prompt with task, context, and integration docs
+
+        Returns:
+            Generated Python code (cleaned and validated)
+
+        Raises:
+            ExecutorError: If OpenAI API fails or code generation fails
+        """
+        import time
+
+        try:
+            logger.debug("Calling OpenAI API to generate code...")
+            start_time = time.time()
+
+            # Call OpenAI API
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a Python code generator for the NOVA workflow engine. "
+                            "Generate clean, executable Python code based on the documentation and task provided. "
+                            "IMPORTANT: The code MUST end with EXACTLY ONE print() statement that outputs JSON. "
+                            "Do NOT print multiple times. Do NOT print empty JSON at the end. "
+                            "Return ONLY the Python code, no explanations or markdown."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.2,  # Low temperature for deterministic output
+                max_tokens=2000,  # Enough for most code snippets
+            )
+
+            generation_time_ms = int((time.time() - start_time) * 1000)
+
+            # Extract generated code
+            raw_code = response.choices[0].message.content
+
+            if not raw_code:
+                raise ExecutorError("OpenAI returned empty response")
+
+            logger.debug(f"OpenAI generation completed in {generation_time_ms}ms")
+            logger.debug(f"Raw code length: {len(raw_code)} chars")
+
+            # Clean markdown blocks and explanations
+            code = self._clean_code_blocks(raw_code)
+
+            if not code:
+                raise ExecutorError("Generated code is empty after cleaning")
+
+            logger.debug(f"Cleaned code length: {len(code)} chars")
+
+            # Validate syntax
+            self._validate_syntax(code)
+
+            logger.debug("Code syntax validated successfully")
+
+            return code
+
+        except Exception as e:
+            if isinstance(e, (ExecutorError, CodeExecutionError)):
+                raise
+
+            logger.exception(f"OpenAI code generation failed: {e}")
+            raise ExecutorError(f"Failed to generate code with OpenAI: {e}")
 
     async def execute(
         self,
-        code: str,
+        code: str,  # In CachedExecutor, this is the PROMPT (natural language)
         context: Dict[str, Any],
         timeout: int
     ) -> Dict[str, Any]:
-        raise NotImplementedError("CachedExecutor is Phase 2 feature")
+        """
+        Execute workflow node by generating code with AI and running in E2B.
+
+        This method treats 'code' parameter as a natural language PROMPT,
+        not hardcoded Python code.
+
+        Flow:
+        1. Build complete prompt with KnowledgeManager (task + context + integration docs)
+        2. Generate Python code with OpenAI (retry up to 3 times)
+        3. Execute generated code in E2B sandbox
+        4. If execution fails, retry with error feedback
+        5. Return result with AI metadata
+
+        Args:
+            code: Natural language prompt/task description (NOT Python code)
+            context: Current workflow context
+            timeout: Execution timeout in seconds (for E2B)
+
+        Returns:
+            Updated context with AI metadata:
+            {
+                ...context updates from execution...,
+                "_ai_metadata": {
+                    "model": "gpt-4o-mini",
+                    "prompt": "Extract total from invoice",
+                    "generated_code": "import fitz\n...",
+                    "code_length": 450,
+                    "tokens_input": 7000,
+                    "tokens_output": 750,
+                    "cost_usd": 0.0015,
+                    "generation_time_ms": 1800,
+                    "execution_time_ms": 1200,
+                    "attempts": 1,
+                    "cache_hit": False  # Phase 2
+                }
+            }
+
+        Raises:
+            ExecutorError: If generation fails after 3 attempts
+            E2BExecutionError: If execution fails after 3 attempts
+        """
+        import time
+
+        prompt_task = code  # 'code' parameter is actually the prompt
+        error_history = []
+        generated_code = None
+        total_start_time = time.time()
+
+        logger.info(f"CachedExecutor executing task: {prompt_task[:100]}...")
+
+        # Retry loop (max 3 attempts)
+        for attempt in range(1, 4):
+            try:
+                logger.info(f"Attempt {attempt}/3: Generating code...")
+
+                # 1. Build complete prompt with knowledge
+                full_prompt = self.knowledge_manager.build_prompt(
+                    task=prompt_task,
+                    context=context,
+                    error_history=error_history if error_history else None
+                )
+
+                logger.debug(f"Full prompt length: {len(full_prompt)} chars (~{len(full_prompt)//4} tokens)")
+
+                # 2. Generate code with OpenAI
+                generation_start = time.time()
+                generated_code = await self._generate_code(full_prompt)
+                generation_time_ms = int((time.time() - generation_start) * 1000)
+
+                logger.info(f"Code generated successfully in {generation_time_ms}ms")
+                logger.debug(f"Generated code:\n{generated_code}")
+
+                # 3. Execute code with E2B
+                execution_start = time.time()
+                result = await self.e2b_executor.execute(
+                    code=generated_code,
+                    context=context,
+                    timeout=timeout
+                )
+                execution_time_ms = int((time.time() - execution_start) * 1000)
+
+                # 4. Success! Add AI metadata
+                total_time_ms = int((time.time() - total_start_time) * 1000)
+
+                token_info = self._estimate_tokens(full_prompt, generated_code)
+
+                result["_ai_metadata"] = {
+                    "model": "gpt-4o-mini",
+                    "prompt": prompt_task,
+                    "generated_code": generated_code,
+                    "code_length": len(generated_code),
+                    "tokens_input": token_info["tokens_input"],
+                    "tokens_output": token_info["tokens_output"],
+                    "tokens_total": token_info["tokens_total"],
+                    "cost_usd": token_info["cost_usd"],
+                    "generation_time_ms": generation_time_ms,
+                    "execution_time_ms": execution_time_ms,
+                    "total_time_ms": total_time_ms,
+                    "attempts": attempt,
+                    "cache_hit": False  # Phase 1 MVP - no cache yet
+                }
+
+                logger.info(
+                    f"✅ CachedExecutor success on attempt {attempt}/3 "
+                    f"(generation: {generation_time_ms}ms, execution: {execution_time_ms}ms, "
+                    f"cost: ${token_info['cost_usd']:.6f})"
+                )
+
+                return result
+
+            except (CodeExecutionError, E2BSandboxError, E2BTimeoutError) as e:
+                # Execution failed - add to error history for next retry
+                logger.warning(
+                    f"Attempt {attempt}/3 failed: {e.__class__.__name__}: {str(e)[:200]}"
+                )
+
+                error_history.append({
+                    "attempt": attempt,
+                    "error": str(e),
+                    "code": generated_code if generated_code else ""
+                })
+
+                # If this was the last attempt, raise
+                if attempt == 3:
+                    logger.error(
+                        f"❌ CachedExecutor failed after 3 attempts. "
+                        f"Last error: {e.__class__.__name__}: {str(e)[:200]}"
+                    )
+                    raise ExecutorError(
+                        f"Failed to generate and execute code after 3 attempts. "
+                        f"Last error: {e}"
+                    )
+
+                # Otherwise, retry with error feedback
+                logger.info(f"Retrying with error feedback...")
+
+            except Exception as e:
+                # Unexpected error - fail immediately
+                logger.exception(f"Unexpected error in CachedExecutor: {e}")
+                raise ExecutorError(f"CachedExecutor unexpected error: {e}")
+
+        # Should never reach here (loop always returns or raises)
+        raise ExecutorError("CachedExecutor failed unexpectedly")
 
 
 class AIExecutor(ExecutorStrategy):
@@ -165,10 +560,32 @@ class E2BExecutor(ExecutorStrategy):
         # Unicode characters are safely escaped as \uXXXX which works in all environments
         context_json = json.dumps(context, ensure_ascii=True)
 
-        full_code = f"""import json
+        # Escape the JSON string for safe embedding in Python code
+        # Replace single quotes and backslashes to avoid breaking the Python string literal
+        # This ensures the JSON can contain ANY characters including newlines, quotes, etc.
+        escaped_json = context_json.replace('\\', '\\\\').replace("'", "\\'")
+
+        # Check if code already has a print statement
+        # AI-generated code (from CachedExecutor) already includes print(json.dumps(...))
+        # So we should NOT add another print statement
+        has_print = 'print(' in code and 'json.dumps' in code
+
+        if has_print:
+            # Code already prints output - just inject context
+            full_code = f"""import json
 
 # Injected context (workflow state)
-context = json.loads('''{context_json}''')
+context = json.loads('{escaped_json}')
+
+# User code (already includes output print)
+{code}
+"""
+        else:
+            # Code doesn't print - add print statement for E2B
+            full_code = f"""import json
+
+# Injected context (workflow state)
+context = json.loads('{escaped_json}')
 
 # User code
 {code}
@@ -178,6 +595,7 @@ context = json.loads('''{context_json}''')
 # Unicode characters will be escaped as \\uXXXX but remain valid JSON
 print(json.dumps(context, ensure_ascii=True))
 """
+
         return full_code
 
     async def execute(
@@ -330,8 +748,22 @@ print(json.dumps(context, ensure_ascii=True))
                         logger.error(error_msg)
                         raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
 
-                    # The last line should be our JSON output
-                    output = stdout_lines[-1]
+                    # Filter out empty JSON objects from stdout_lines
+                    # Sometimes AI-generated code adds print(json.dumps(context)) which prints {}
+                    valid_lines = []
+                    for line in stdout_lines:
+                        # Skip empty JSON objects
+                        if line.strip() in ['{}', '[]', 'null']:
+                            continue
+                        valid_lines.append(line)
+
+                    if not valid_lines:
+                        error_msg = f"E2B sandbox {sandbox_id} returned only empty JSON"
+                        logger.error(error_msg)
+                        raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
+
+                    # The last VALID line should be our JSON output
+                    output = valid_lines[-1]
 
                     # Parse updated context
                     try:
@@ -385,6 +817,7 @@ print(json.dumps(context, ensure_ascii=True))
 def get_executor(
     executor_type: str = "e2b",
     api_key: Optional[str] = None,
+    db_session: Optional[Any] = None,
     **kwargs
 ) -> ExecutorStrategy:
     """
@@ -396,6 +829,7 @@ def get_executor(
     Args:
         executor_type: Type of executor ("e2b", "cached", "ai"). Default: "e2b"
         api_key: E2B API key (or set E2B_API_KEY env var)
+        db_session: Optional SQLAlchemy session (required for "cached" executor cache in Phase 2)
         **kwargs: Additional arguments for specific executors
 
     Returns:
@@ -415,11 +849,16 @@ def get_executor(
         >>> executor = get_executor("e2b", api_key="e2b_...")
         >>> isinstance(executor, E2BExecutor)
         True
+
+        >>> # Cached executor with AI code generation
+        >>> executor = get_executor("cached", db_session=session)
+        >>> isinstance(executor, CachedExecutor)
+        True
     """
     executors = {
         "e2b": E2BExecutor,
-        "cached": CachedExecutor,  # Phase 2
-        "ai": AIExecutor,  # Phase 2
+        "cached": CachedExecutor,  # AI-powered code generation (Phase 1+)
+        "ai": AIExecutor,  # Future: Always fresh generation (Phase 2)
     }
 
     executor_class = executors.get(executor_type)
@@ -429,17 +868,29 @@ def get_executor(
             f"Valid types: {list(executors.keys())}"
         )
 
-    # Check Phase 1 limitation (only e2b available)
-    if executor_type != "e2b":
+    # Check Phase 2 limitation (AIExecutor not available yet)
+    if executor_type == "ai":
         raise NotImplementedError(
             f"Executor '{executor_type}' is a Phase 2 feature. "
-            f"Phase 1 uses E2B cloud sandbox exclusively."
+            f"Use 'cached' executor for AI-powered code generation."
         )
 
-    # E2BExecutor requires api_key (or E2B_API_KEY env var)
-    # Use custom template with pre-installed packages for faster cold starts
-    # Template: nova-workflow-fresh (wzqi57u2e8v2f90t6lh5)
-    # Pre-installed: PyMuPDF, pandas, requests, pillow, psycopg2-binary, python-dotenv
-    # IMPORTANT: Ensure E2B_TEMPLATE_ID is set in BOTH API and Worker services (Railway)
-    template_id = os.getenv("E2B_TEMPLATE_ID", None)
-    return E2BExecutor(api_key=api_key, template=template_id)
+    # Create executor based on type
+    if executor_type == "e2b":
+        # E2BExecutor requires api_key (or E2B_API_KEY env var)
+        # Use custom template with pre-installed packages for faster cold starts
+        # Template: nova-workflow-fresh (wzqi57u2e8v2f90t6lh5)
+        # Pre-installed: PyMuPDF, pandas, requests, pillow, psycopg2-binary, python-dotenv
+        # IMPORTANT: Ensure E2B_TEMPLATE_ID is set in BOTH API and Worker services (Railway)
+        template_id = os.getenv("E2B_TEMPLATE_ID", None)
+        return E2BExecutor(api_key=api_key, template=template_id)
+
+    elif executor_type == "cached":
+        # CachedExecutor uses OpenAI for code generation + E2B for execution
+        # Requires OPENAI_API_KEY environment variable
+        # db_session optional (will be used for cache in Phase 2)
+        return CachedExecutor(db_session=db_session)
+
+    else:
+        # Should never reach here (we check executor_class above)
+        raise ValueError(f"Unknown executor type: '{executor_type}'")

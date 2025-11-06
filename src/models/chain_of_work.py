@@ -54,6 +54,22 @@ class ChainOfWork(Base):
     # For DecisionNodes, this stores which edge was taken (next node ID)
     path_taken = Column(String(255), nullable=True)
 
+    # AI metadata (Phase 2: AI-powered code generation)
+    # When executor_type == "cached", this stores AI generation metadata:
+    # {
+    #   "model": "gpt-4o-mini",
+    #   "prompt": "Extract invoice amount from PDF",
+    #   "generated_code": "import fitz\n...",
+    #   "tokens_input": 7000,
+    #   "tokens_output": 450,
+    #   "cost_usd": 0.0012,
+    #   "generation_time_ms": 1800,
+    #   "execution_time_ms": 1200,
+    #   "attempts": 1,
+    #   "cache_hit": false
+    # }
+    ai_metadata = Column(JSON, nullable=True)
+
     # Relationship to execution
     execution = relationship("Execution", back_populates="chain_of_work")
 

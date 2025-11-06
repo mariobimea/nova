@@ -82,7 +82,7 @@ class EndNode(BaseNode):
         pass
 
 
-class ActionNode(BaseNode):
+class ActionNode(BaseModel):
     """
     Executes Python code and modifies the workflow context.
 
@@ -92,85 +92,169 @@ class ActionNode(BaseNode):
     - Call external APIs
     - Perform calculations
 
-    The code is executed in the Hetzner sandbox with context injection.
+    Supports two execution modes:
+    1. Hardcoded code (executor="e2b"): Executes predefined Python code
+    2. AI-generated code (executor="cached"): Generates code from natural language prompt
+
+    Examples:
+        # Hardcoded mode
+        {
+            "type": "action",
+            "executor": "e2b",
+            "code": "context['result'] = 42"
+        }
+
+        # AI mode
+        {
+            "type": "action",
+            "executor": "cached",
+            "prompt": "Calculate the sum of context['a'] and context['b']"
+        }
     """
 
+    id: str = Field(..., min_length=1, description="Unique node identifier")
     type: Literal["action"] = "action"
-    code: str = Field(..., min_length=1, description="Python code to execute")
+    label: Optional[str] = Field(None, description="Human-readable label")
+
+    # Code or prompt (mutually exclusive based on executor type)
+    code: Optional[str] = Field(None, min_length=1, description="Python code to execute (for e2b executor)")
+    prompt: Optional[str] = Field(None, min_length=1, description="Natural language prompt (for cached/ai executors)")
+
     executor: Literal["e2b", "cached", "ai"] = Field(
         "e2b",
-        description="Execution strategy (e2b is default)"
+        description="Execution strategy (e2b=hardcoded, cached=AI with cache, ai=always AI)"
     )
     timeout: int = Field(
-        10,
+        60,
         ge=1,
-        le=60,
+        le=300,
         description="Execution timeout in seconds"
     )
 
-    @field_validator("code")
+    class Config:
+        frozen = True  # Immutable
+        extra = "allow"  # Allow extra fields for flexibility
+
+    @field_validator("id")
     @classmethod
-    def validate_code_not_empty(cls, v: str) -> str:
-        """Ensure code is not empty or whitespace"""
+    def validate_id_not_empty(cls, v: str) -> str:
+        """Ensure ID is not empty or whitespace"""
         if not v.strip():
-            raise ValueError("Code cannot be empty")
+            raise ValueError("Node ID cannot be empty")
         return v
 
     def validate_node(self) -> None:
         """
-        Validate Python syntax of the code.
-        Does NOT execute the code, just checks syntax.
+        Validate that either code or prompt is provided based on executor type.
         """
-        try:
-            compile(self.code, "<string>", "exec")
-        except SyntaxError as e:
-            raise ValueError(f"Invalid Python syntax in code: {e}")
+        if self.executor == "cached" or self.executor == "ai":
+            # AI executors require prompt
+            if not self.prompt:
+                raise ValueError(
+                    f"ActionNode with executor='{self.executor}' must have 'prompt' field"
+                )
+            if self.code:
+                raise ValueError(
+                    f"ActionNode with executor='{self.executor}' should use 'prompt', not 'code'"
+                )
+        else:
+            # E2B executor requires code
+            if not self.code:
+                raise ValueError(
+                    f"ActionNode with executor='{self.executor}' must have 'code' field"
+                )
+            if self.prompt:
+                raise ValueError(
+                    f"ActionNode with executor='{self.executor}' should use 'code', not 'prompt'"
+                )
+
+            # Validate Python syntax if code is provided
+            try:
+                compile(self.code, "<string>", "exec")
+            except SyntaxError as e:
+                raise ValueError(f"Invalid Python syntax in code: {e}")
 
 
-class DecisionNode(BaseNode):
+class DecisionNode(BaseModel):
     """
-    Executes Python code and returns a boolean for branching.
+    Executes code/prompt and returns a boolean for branching.
 
-    DecisionNodes are similar to ActionNodes but with a key difference:
-    - ActionNode: Can modify any part of context
-    - DecisionNode: Must write a boolean to context for branching
+    DecisionNodes determine which path to follow based on logic:
+    - Can use hardcoded code (executor="e2b")
+    - Can use AI-generated code (executor="cached")
 
-    Example code:
-        is_valid = invoice_data["amount"] > 0
-        context["branch_decision"] = is_valid
+    The decision code must set context["branch_decision"] to True or False.
+    The GraphEngine reads this to determine which edge to follow.
 
-    The GraphEngine will read context["branch_decision"] to determine
-    which edge to follow (true_edge or false_edge).
+    Examples:
+        # Hardcoded decision
+        {
+            "type": "decision",
+            "executor": "e2b",
+            "code": "context['branch_decision'] = context['amount'] > 1000"
+        }
 
-    The code is executed in the Hetzner sandbox (same as ActionNode).
+        # AI-powered decision
+        {
+            "type": "decision",
+            "executor": "cached",
+            "prompt": "Check if the invoice amount is greater than 1000. Return True or False."
+        }
     """
 
+    id: str = Field(..., min_length=1, description="Unique node identifier")
     type: Literal["decision"] = "decision"
-    code: str = Field(..., min_length=1, description="Python code that sets branch decision")
+    label: Optional[str] = Field(None, description="Human-readable label")
+
+    # Code or prompt (mutually exclusive based on executor type)
+    code: Optional[str] = Field(None, min_length=1, description="Python code that sets branch_decision")
+    prompt: Optional[str] = Field(None, min_length=1, description="Natural language prompt for AI decision")
+
+    executor: Literal["e2b", "cached", "ai"] = Field(
+        "e2b",
+        description="Execution strategy"
+    )
     timeout: int = Field(
-        10,
+        60,
         ge=1,
-        le=60,
+        le=300,
         description="Execution timeout in seconds"
     )
 
-    @field_validator("code")
+    class Config:
+        frozen = True  # Immutable
+        extra = "allow"  # Allow extra fields
+
+    @field_validator("id")
     @classmethod
-    def validate_code_not_empty(cls, v: str) -> str:
-        """Ensure code is not empty or whitespace"""
+    def validate_id_not_empty(cls, v: str) -> str:
+        """Ensure ID is not empty or whitespace"""
         if not v.strip():
-            raise ValueError("Code cannot be empty")
+            raise ValueError("Node ID cannot be empty")
         return v
 
     def validate_node(self) -> None:
         """
-        Validate Python syntax of the code.
-        Does NOT execute the code, just checks syntax.
+        Validate that either code or prompt is provided based on executor type.
         """
-        try:
-            compile(self.code, "<string>", "exec")
-        except SyntaxError as e:
-            raise ValueError(f"Invalid Python syntax in code: {e}")
+        if self.executor == "cached" or self.executor == "ai":
+            # AI executors require prompt
+            if not self.prompt:
+                raise ValueError(
+                    f"DecisionNode with executor='{self.executor}' must have 'prompt' field"
+                )
+        else:
+            # E2B executor requires code
+            if not self.code:
+                raise ValueError(
+                    f"DecisionNode with executor='{self.executor}' must have 'code' field"
+                )
+
+            # Validate Python syntax if code is provided
+            try:
+                compile(self.code, "<string>", "exec")
+            except SyntaxError as e:
+                raise ValueError(f"Invalid Python syntax in code: {e}")
 
 
 # Type alias for any node type

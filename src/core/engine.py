@@ -254,30 +254,81 @@ class GraphEngine:
                 pass
 
             elif isinstance(node, ActionNode):
-                # ActionNode: Execute code, update context
-                executor = get_executor(node.executor, api_key=self.api_key)
+                # ActionNode: Execute code or prompt, update context
+                executor = get_executor(
+                    node.executor,
+                    api_key=self.api_key,
+                    db_session=self.db_session  # Pass db_session for CachedExecutor
+                )
+
+                # Detect if node uses prompt (AI) or code (hardcoded)
+                # CachedExecutor expects prompts, E2BExecutor expects code
+                if node.executor == "cached":
+                    # AI-powered executor: uses natural language prompts
+                    code_or_prompt = getattr(node, 'prompt', None)
+                    if not code_or_prompt:
+                        raise GraphExecutionError(
+                            f"ActionNode {node.id} with executor='cached' must have 'prompt' attribute"
+                        )
+                else:
+                    # Traditional executor: uses hardcoded Python code
+                    code_or_prompt = node.code
+                    if not code_or_prompt:
+                        raise GraphExecutionError(
+                            f"ActionNode {node.id} must have 'code' attribute"
+                        )
 
                 updated_context = await executor.execute(
-                    code=node.code,
+                    code=code_or_prompt,  # This is either code or prompt depending on executor
                     context=context.get_all(),
                     timeout=node.timeout
                 )
 
+                # Extract AI metadata if present (only for CachedExecutor)
+                ai_metadata = updated_context.pop("_ai_metadata", None)
+                if ai_metadata:
+                    metadata["ai_metadata"] = ai_metadata
+
                 context.update(updated_context)
-                metadata["code_executed"] = node.code
+                metadata["code_executed"] = code_or_prompt
 
             elif isinstance(node, DecisionNode):
-                # DecisionNode: Execute code, read decision, store for branching
-                executor = get_executor("e2b", api_key=self.api_key)
+                # DecisionNode: Execute code or prompt for decision, read result, store for branching
+                executor = get_executor(
+                    node.executor,
+                    api_key=self.api_key,
+                    db_session=self.db_session  # Pass db_session for CachedExecutor
+                )
+
+                # Detect if node uses prompt (AI) or code (hardcoded)
+                if node.executor == "cached":
+                    # AI-powered executor: uses natural language prompts
+                    code_or_prompt = getattr(node, 'prompt', None)
+                    if not code_or_prompt:
+                        raise GraphExecutionError(
+                            f"DecisionNode {node.id} with executor='cached' must have 'prompt' attribute"
+                        )
+                else:
+                    # Traditional executor: uses hardcoded Python code
+                    code_or_prompt = node.code
+                    if not code_or_prompt:
+                        raise GraphExecutionError(
+                            f"DecisionNode {node.id} must have 'code' attribute"
+                        )
 
                 updated_context = await executor.execute(
-                    code=node.code,
+                    code=code_or_prompt,  # This is either code or prompt depending on executor
                     context=context.get_all(),
                     timeout=node.timeout
                 )
 
+                # Extract AI metadata if present (only for CachedExecutor)
+                ai_metadata = updated_context.pop("_ai_metadata", None)
+                if ai_metadata:
+                    metadata["ai_metadata"] = ai_metadata
+
                 context.update(updated_context)
-                metadata["code_executed"] = node.code
+                metadata["code_executed"] = code_or_prompt
 
                 # Extract decision result
                 decision_result = context.get("branch_decision")
@@ -417,6 +468,7 @@ class GraphEngine:
                         error_message=metadata.get('error_message'),
                         decision_result=metadata.get('decision_result'),
                         path_taken=metadata.get('path_taken'),
+                        ai_metadata=metadata.get('ai_metadata'),  # NEW: AI generation metadata
                         timestamp=datetime.utcnow()
                     )
                     self.db_session.add(chain_entry)
@@ -455,6 +507,7 @@ class GraphEngine:
                         error_message=failed_metadata.get('error_message'),
                         decision_result=failed_metadata.get('decision_result'),
                         path_taken=failed_metadata.get('path_taken'),
+                        ai_metadata=failed_metadata.get('ai_metadata'),  # NEW: AI generation metadata (usually None for failed nodes)
                         timestamp=datetime.utcnow()
                     )
                     self.db_session.add(chain_entry)
