@@ -222,42 +222,42 @@ class KnowledgeManager:
 
         sections.append("\n---\n")
 
-        # 4. Detect and load integration docs
-        integrations = self.detect_integrations(task, context)
+        # 4. DISABLED: Integration docs (Mario wants only prompt + context)
+        # integrations = self.detect_integrations(task, context)
+        #
+        # if integrations:
+        #     sections.append("## INTEGRATION DOCUMENTATION\n\n")
+        #     sections.append(f"Relevant integrations detected: {', '.join(integrations)}\n\n")
+        #
+        #     for integration in integrations:
+        #         try:
+        #             integration_path = f"integrations/{integration}.md"
+        #             integration_doc = self.load_file(integration_path)
+        #             sections.append(f"### {integration.upper()}\n\n")
+        #             sections.append(integration_doc)
+        #             sections.append("\n\n---\n\n")
+        #         except FileNotFoundError:
+        #             # Skip if integration doc doesn't exist
+        #             sections.append(f"(Integration doc for '{integration}' not found)\n\n")
 
-        if integrations:
-            sections.append("## INTEGRATION DOCUMENTATION\n\n")
-            sections.append(f"Relevant integrations detected: {', '.join(integrations)}\n\n")
-
-            for integration in integrations:
-                try:
-                    integration_path = f"integrations/{integration}.md"
-                    integration_doc = self.load_file(integration_path)
-                    sections.append(f"### {integration.upper()}\n\n")
-                    sections.append(integration_doc)
-                    sections.append("\n\n---\n\n")
-                except FileNotFoundError:
-                    # Skip if integration doc doesn't exist
-                    sections.append(f"(Integration doc for '{integration}' not found)\n\n")
-
-        # 5. Error history (if retry)
-        if error_history and len(error_history) > 0:
-            sections.append("## PREVIOUS ATTEMPTS (FAILED)\n\n")
-            sections.append("The following attempts to generate code have failed. "
-                          "Please learn from these errors and fix the issues.\n\n")
-
-            for attempt in error_history:
-                attempt_num = attempt.get('attempt', '?')
-                error_msg = attempt.get('error', 'Unknown error')
-                code = attempt.get('code', '')
-
-                sections.append(f"**Attempt {attempt_num}:**\n\n")
-                sections.append(f"Error: `{error_msg}`\n\n")
-
-                if code:
-                    sections.append("Generated code:\n```python\n")
-                    sections.append(code)
-                    sections.append("\n```\n\n")
+        # 5. DISABLED: Error history (Mario wants to simplify prompt)
+        # if error_history and len(error_history) > 0:
+        #     sections.append("## PREVIOUS ATTEMPTS (FAILED)\n\n")
+        #     sections.append("The following attempts to generate code have failed. "
+        #                   "Please learn from these errors and fix the issues.\n\n")
+        #
+        #     for attempt in error_history:
+        #         attempt_num = attempt.get('attempt', '?')
+        #         error_msg = attempt.get('error', 'Unknown error')
+        #         code = attempt.get('code', '')
+        #
+        #         sections.append(f"**Attempt {attempt_num}:**\n\n")
+        #         sections.append(f"Error: `{error_msg}`\n\n")
+        #
+        #         if code:
+        #             sections.append("Generated code:\n```python\n")
+        #             sections.append(code)
+        #             sections.append("\n```\n\n")
 
         # 6. Final instruction
         sections.append("\n---\n\n")

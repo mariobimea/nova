@@ -14,17 +14,21 @@ Extract text and data from PDF files using PyMuPDF (fitz) in NOVA workflows.
 
 ---
 
-## Open PDF from Bytes
+## Open PDF from Base64 String
 
-Most common pattern for email attachments.
+⚠️ **IMPORTANT**: In NOVA workflows, `pdf_data` is stored as a **base64-encoded string** (not raw bytes). You MUST decode it first.
 
 ```python
 import fitz
 import io
 import json
+import base64
 
-# Get PDF data from context (bytes from email)
-pdf_data = context['pdf_data']
+# Get PDF data from context (base64 string)
+pdf_data_base64 = context['pdf_data']
+
+# Decode base64 to bytes
+pdf_data = base64.b64decode(pdf_data_base64)
 
 # Open PDF from bytes
 pdf_stream = io.BytesIO(pdf_data)
@@ -49,8 +53,12 @@ doc.close()
 import fitz
 import io
 import json
+import base64
 
-pdf_data = context['pdf_data']
+# Decode base64 to bytes
+pdf_data_base64 = context['pdf_data']
+pdf_data = base64.b64decode(pdf_data_base64)
+
 pdf_stream = io.BytesIO(pdf_data)
 doc = fitz.open(stream=pdf_stream, filetype='pdf')
 
@@ -103,11 +111,15 @@ import fitz
 import io
 import re
 import json
+import base64
 
 try:
-    # Get PDF from context
-    pdf_data = context['pdf_data']
+    # Get PDF from context (base64 string)
+    pdf_data_base64 = context['pdf_data']
     pdf_filename = context.get('pdf_filename', 'unknown.pdf')
+
+    # Decode base64 to bytes
+    pdf_data = base64.b64decode(pdf_data_base64)
 
     # Open PDF
     pdf_stream = io.BytesIO(pdf_data)
