@@ -93,7 +93,8 @@ class KnowledgeManager:
             'imap': ['email', 'imap', 'inbox', 'read email', 'unread', 'fetch email'],
             'smtp': ['send email', 'smtp', 'reply', 'notification', 'send mail'],
             'pdf': ['pdf', 'invoice', 'extract', 'document'],
-            'postgres': ['database', 'db', 'save', 'store', 'query', 'insert', 'update', 'postgres', 'sql']
+            'postgres': ['database', 'db', 'save', 'store', 'query', 'insert', 'update', 'postgres', 'sql'],
+            'regex': ['pattern', 'regex', 'search text', 'extract amount', 'find', 'match']
         }
 
         for integration, keywords in integration_keywords.items():
@@ -107,7 +108,8 @@ class KnowledgeManager:
             'imap': ['email_subject', 'email_from', 'email_date', 'has_emails'],
             'smtp': ['smtp_host', 'smtp_port', 'rejection_reason'],
             'pdf': ['pdf_data', 'pdf_filename', 'pdf_text'],
-            'postgres': ['invoice_id', 'db_table', 'sql_query']
+            'postgres': ['invoice_id', 'db_table', 'sql_query'],
+            'regex': ['pdf_text', 'total_amount', 'amount_found']
         }
 
         for integration, hint_keys in context_key_hints.items():
@@ -222,23 +224,23 @@ class KnowledgeManager:
 
         sections.append("\n---\n")
 
-        # 4. DISABLED: Integration docs (Mario wants only prompt + context)
-        # integrations = self.detect_integrations(task, context)
-        #
-        # if integrations:
-        #     sections.append("## INTEGRATION DOCUMENTATION\n\n")
-        #     sections.append(f"Relevant integrations detected: {', '.join(integrations)}\n\n")
-        #
-        #     for integration in integrations:
-        #         try:
-        #             integration_path = f"integrations/{integration}.md"
-        #             integration_doc = self.load_file(integration_path)
-        #             sections.append(f"### {integration.upper()}\n\n")
-        #             sections.append(integration_doc)
-        #             sections.append("\n\n---\n\n")
-        #         except FileNotFoundError:
-        #             # Skip if integration doc doesn't exist
-        #             sections.append(f"(Integration doc for '{integration}' not found)\n\n")
+        # 4. Integration docs (auto-detected based on task and context)
+        integrations = self.detect_integrations(task, context)
+
+        if integrations:
+            sections.append("## INTEGRATION DOCUMENTATION\n\n")
+            sections.append(f"Relevant integrations detected: {', '.join(integrations)}\n\n")
+
+            for integration in integrations:
+                try:
+                    integration_path = f"integrations/{integration}.md"
+                    integration_doc = self.load_file(integration_path)
+                    sections.append(f"### {integration.upper()}\n\n")
+                    sections.append(integration_doc)
+                    sections.append("\n\n---\n\n")
+                except FileNotFoundError:
+                    # Skip if integration doc doesn't exist
+                    sections.append(f"(Integration doc for '{integration}' not found)\n\n")
 
         # 5. DISABLED: Error history (Mario wants to simplify prompt)
         # if error_history and len(error_history) > 0:

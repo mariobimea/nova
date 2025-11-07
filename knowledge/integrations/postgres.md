@@ -1,114 +1,131 @@
-# PostgreSQL - Database Operations
+# PostgreSQL - psycopg2
+
+**Official Documentation**: https://github.com/yugabyte/psycopg2
 
 Connect to PostgreSQL and execute queries using `psycopg2` in NOVA workflows.
 
 ---
 
-## Overview
-
-**Capabilities**: Connect to PostgreSQL, execute SELECT/INSERT/UPDATE/DELETE, parameterized queries, transactions, binary data (BYTEA).
-
-**Use cases**: Save invoices to database, query records, update workflow status, store PDF attachments.
-
----
-
-## Connection
+## Basic Connection and Usage
 
 ```python
-import json
-from src.models.credentials import get_database_connection
+import psycopg2
 
-# Get connection to client database
-conn = get_database_connection(context['client_slug'])
-cursor = conn.cursor()
+# Connect to an existing database
+conn = psycopg2.connect("dbname=test user=postgres")
 
-# Always close when done
-cursor.close()
+# Open a cursor to perform database operations
+cur = conn.cursor()
+
+# Execute a command: this creates a new table
+cur.execute("CREATE TABLE test (id serial PRIMARY KEY, num integer, data varchar);")
+
+# Pass data to fill query placeholders (prevents SQL injection)
+cur.execute("INSERT INTO test (num, data) VALUES (%s, %s)", (100, "abc'def"))
+
+# Query the database and obtain data as Python objects
+cur.execute("SELECT * FROM test;")
+cur.fetchone()
+
+# Make the changes to the database persistent
+conn.commit()
+
+# Close communication with the database
+cur.close()
 conn.close()
 ```
 
 ---
 
-## SELECT Query
+## Connection with Context Manager
+
+Use `with` statement for automatic transaction management:
 
 ```python
-import json
-from src.models.credentials import get_database_connection
+import psycopg2
 
-conn = get_database_connection(context['client_slug'])
-cursor = conn.cursor()
+DSN = "your_database_connection_string"
 
-# Execute SELECT
-cursor.execute("SELECT id, email_from, total_amount FROM invoices LIMIT 10")
-rows = cursor.fetchall()
+with psycopg2.connect(DSN) as conn:
+    with conn.cursor() as curs:
+        curs.execute("SELECT 1")
+        # Transaction commits automatically if no exception
+        # Rolls back automatically if exception occurs
 
-# Process results
-invoices = []
-for row in rows:
-    invoices.append({
-        'id': row[0],
-        'email_from': row[1],
-        'total_amount': float(row[2])
-    })
-
-cursor.close()
+# Connection stays open after 'with' block - close it manually
 conn.close()
-
-print(json.dumps({
-    "status": "success",
-    "context_updates": {"invoices": invoices}
-}))
 ```
 
 ---
 
 ## Parameterized Queries (CRITICAL)
 
-**ALWAYS use `%s` placeholders** to prevent SQL injection.
+**ALWAYS use `%s` placeholders** to prevent SQL injection:
 
 ```python
-# ✅ CORRECT - Safe
+# ✅ CORRECT - Safe from SQL injection
 email = "john@example.com"
-cursor.execute("SELECT * FROM invoices WHERE email_from = %s", (email,))
+cur.execute("SELECT * FROM invoices WHERE email_from = %s", (email,))
 
 # Multiple parameters
-cursor.execute(
+cur.execute(
     "SELECT * FROM invoices WHERE email_from = %s AND total_amount > %s",
     (email, 1000)
 )
 
 # ❌ WRONG - SQL Injection vulnerability
-cursor.execute(f"SELECT * FROM invoices WHERE email_from = '{email}'")  # NEVER DO THIS
+cur.execute(f"SELECT * FROM invoices WHERE email_from = '{email}'")  # NEVER DO THIS
+```
+
+**Named parameters** for better readability:
+
+```python
+import datetime
+
+cur.execute("""
+    INSERT INTO some_table (an_int, a_date, another_date, a_string)
+    VALUES (%(int)s, %(date)s, %(date)s, %(str)s);
+    """,
+    {'int': 10, 'str': "O'Reilly", 'date': datetime.date(2005, 11, 18)})
+```
+
+**Single parameter tuple** (note the comma):
+
+```python
+# Single parameter - requires trailing comma
+cur.execute("SELECT * FROM invoices WHERE id = %s", (42,))
 ```
 
 ---
 
-## INSERT Query
+## INSERT with RETURNING
+
+Get auto-generated ID after insert:
 
 ```python
+import psycopg2
 import json
-from src.models.credentials import get_database_connection
 
-conn = get_database_connection(context['client_slug'])
-cursor = conn.cursor()
+conn = psycopg2.connect("dbname=mydb user=postgres")
+cur = conn.cursor()
 
 # INSERT with RETURNING to get auto-generated ID
-cursor.execute("""
+cur.execute("""
     INSERT INTO invoices (email_from, total_amount, currency)
     VALUES (%s, %s, %s)
     RETURNING id
 """, (
-    context['email_from'],
-    context['total_amount'],
+    "customer@example.com",
+    150.00,
     'EUR'
 ))
 
-invoice_id = cursor.fetchone()[0]
+invoice_id = cur.fetchone()[0]
 
 # CRITICAL: Commit transaction
 conn.commit()
 
-cursor.close()
+cur.close()
 conn.close()
 
 print(json.dumps({
@@ -122,39 +139,62 @@ print(json.dumps({
 ## UPDATE Query
 
 ```python
-cursor.execute("""
+cur.execute("""
     UPDATE invoices
     SET total_amount = %s
     WHERE id = %s
-""", (context['new_amount'], context['invoice_id']))
+""", (200.50, 42))
 
-rows_updated = cursor.rowcount
+rows_updated = cur.rowcount  # Number of rows affected
 conn.commit()
 ```
 
 ---
 
-## Transactions
+## SELECT and Fetch Results
 
-Multiple operations atomically.
+```python
+cur.execute("SELECT id, email_from, total_amount FROM invoices LIMIT 10")
+rows = cur.fetchall()
+
+# Process results
+invoices = []
+for row in rows:
+    invoices.append({
+        'id': row[0],
+        'email_from': row[1],
+        'total_amount': float(row[2])
+    })
+
+print(json.dumps({
+    "status": "success",
+    "context_updates": {"invoices": invoices}
+}))
+```
+
+---
+
+## Transactions (Atomic Operations)
+
+Multiple operations that succeed or fail together:
 
 ```python
 try:
-    conn = get_database_connection(context['client_slug'])
-    cursor = conn.cursor()
+    conn = psycopg2.connect("dbname=mydb")
+    cur = conn.cursor()
 
     # Operation 1
-    cursor.execute("""
+    cur.execute("""
         INSERT INTO invoices (email_from, total_amount)
         VALUES (%s, %s)
         RETURNING id
-    """, (context['email_from'], context['total_amount']))
-    invoice_id = cursor.fetchone()[0]
+    """, ("customer@example.com", 150.00))
+    invoice_id = cur.fetchone()[0]
 
     # Operation 2
-    cursor.execute("""
+    cur.execute("""
         UPDATE accounts SET balance = balance - %s WHERE id = %s
-    """, (context['total_amount'], context['account_id']))
+    """, (150.00, 10))
 
     # Commit both atomically
     conn.commit()
@@ -169,47 +209,78 @@ except Exception as e:
     conn.rollback()
     print(json.dumps({"status": "error", "message": str(e)}))
 finally:
-    cursor.close()
+    cur.close()
     conn.close()
 ```
 
 ---
 
-## Binary Data (PDFs)
+## Binary Data (BYTEA)
+
+Insert binary data (e.g., PDFs) using `psycopg2.Binary`:
 
 ```python
-# Insert PDF as binary
-pdf_data = context['pdf_data']  # bytes
+import psycopg2
 
-cursor.execute("""
+# Read binary file
+with open('picture.png', 'rb') as f:
+    mypic = f.read()
+
+cur.execute("INSERT INTO blobs (file) VALUES (%s)",
+    (psycopg2.Binary(mypic),))
+
+conn.commit()
+```
+
+**In NOVA workflows** (PDF attachments):
+
+```python
+import base64
+import psycopg2
+
+# Get PDF data from context (base64 string in NOVA)
+pdf_data_base64 = context['pdf_data']
+pdf_data = base64.b64decode(pdf_data_base64)
+
+cur.execute("""
     INSERT INTO invoices (pdf_filename, pdf_content, pdf_size_bytes)
     VALUES (%s, %s, %s)
     RETURNING id
 """, (
     context['pdf_filename'],
-    pdf_data,  # psycopg2 handles bytes automatically
+    psycopg2.Binary(pdf_data),  # Handles bytes automatically
     len(pdf_data)
 ))
 
+invoice_id = cur.fetchone()[0]
 conn.commit()
 ```
 
 ---
 
-## Complete Example
+## Complete Example: Save Invoice to Database
 
 ```python
 import psycopg2
 import json
-from src.models.credentials import get_database_connection
+import base64
 
 try:
     # Connect
-    conn = get_database_connection(context['client_slug'])
-    cursor = conn.cursor()
+    conn = psycopg2.connect(
+        host=context['db_host'],
+        port=context['db_port'],
+        dbname=context['db_name'],
+        user=context['db_user'],
+        password=context['db_password']
+    )
+    cur = conn.cursor()
+
+    # Decode PDF data from base64
+    pdf_data = base64.b64decode(context['pdf_data'])
 
     # Insert invoice
-    cursor.execute("""
+    cur.execute("""
         INSERT INTO invoices (
             email_from,
             email_subject,
@@ -223,15 +294,15 @@ try:
         context['email_from'],
         context['email_subject'],
         context['pdf_filename'],
-        context['pdf_data'],
+        psycopg2.Binary(pdf_data),
         context['total_amount'],
         'EUR'
     ))
 
-    invoice_id = cursor.fetchone()[0]
+    invoice_id = cur.fetchone()[0]
     conn.commit()
 
-    cursor.close()
+    cur.close()
     conn.close()
 
     print(json.dumps({
@@ -247,10 +318,60 @@ except Exception as e:
         conn.rollback()
     print(json.dumps({"status": "error", "message": str(e)}))
 finally:
-    if cursor:
-        cursor.close()
+    if cur:
+        cur.close()
     if conn:
         conn.close()
+```
+
+---
+
+## Execute Batch (Multiple Inserts)
+
+Efficiently insert multiple rows:
+
+```python
+from psycopg2.extras import execute_batch
+
+# List of parameter tuples
+params_list = [
+    ("customer1@example.com", 100.0),
+    ("customer2@example.com", 200.0),
+    ("customer3@example.com", 150.0)
+]
+
+execute_batch(cur,
+    "INSERT INTO invoices (email_from, total_amount) VALUES (%s, %s)",
+    params_list)
+
+conn.commit()
+```
+
+---
+
+## Commit and Rollback
+
+```python
+# Commit transaction (save changes)
+conn.commit()
+
+# Rollback transaction (discard changes)
+conn.rollback()
+
+# Note: Closing connection without commit = implicit rollback
+```
+
+---
+
+## Autocommit Mode
+
+For commands that cannot run in a transaction (e.g., `CREATE DATABASE`, `VACUUM`):
+
+```python
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+cur.execute("CREATE DATABASE newdb")
 ```
 
 ---
@@ -260,11 +381,14 @@ finally:
 - **Parameterized queries**: ALWAYS use `%s` placeholders (prevents SQL injection)
 - **Commit transactions**: Call `conn.commit()` after INSERT/UPDATE/DELETE
 - **Rollback on error**: Call `conn.rollback()` in exception handler
-- **Close resources**: Always close cursor and connection
+- **Close resources**: Always close cursor and connection (or use `with` statement)
 - **Single-element tuple**: Use `(value,)` with comma for one parameter
 - **Check fetchone()**: May return `None` if no results
+- **Binary data**: Use `psycopg2.Binary()` for BYTEA columns
+- **Connection strings**: Can use `psycopg2.connect(host=..., port=..., dbname=...)` or DSN string
 
 ---
 
 **Integration**: PostgreSQL (psycopg2)
 **Use with**: Invoice storage, data persistence, workflow state management
+**Official Docs**: https://www.psycopg.org/docs/

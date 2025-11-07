@@ -1,121 +1,27 @@
-# IMAP - Reading Emails
+# IMAP - Email Reading (imaplib)
 
-Read emails using Python's `imaplib` library in NOVA workflows.
+**Official Documentation**: https://docs.python.org/3/library/imaplib.html
 
----
-
-## Overview
-
-**Capabilities**: Connect to email servers, search/filter emails, read headers, download attachments, manage email state, validate sender whitelists.
-
-**Use cases**: Process invoices via email, download PDF attachments, automated email filtering.
+Read emails via IMAP using Python's built-in `imaplib` module in NOVA workflows.
 
 ---
 
-## Connection
+## Basic Connection (IMAP4_SSL)
+
+Connect to IMAP server with SSL encryption (port 993):
 
 ```python
 import imaplib
-import json
-from src.models.credentials import get_email_credentials
+import getpass
 
-# Get credentials from NOVA
-email_creds = get_email_credentials(context['client_slug'])
+# Connect with SSL
+mail = imaplib.IMAP4_SSL(host='imap.gmail.com')
 
-# Connect to IMAP server (SSL)
-mail = imaplib.IMAP4_SSL(email_creds.imap_host, email_creds.imap_port)
-mail.login(email_creds.email_user, email_creds.email_password)
-mail.select('INBOX')
-```
+# Login
+mail.login('user@example.com', 'password')
 
----
-
-## Search Emails
-
-```python
-# Unread emails only
-status, messages = mail.search(None, 'UNSEEN')
-
-# From specific sender
-status, messages = mail.search(None, 'FROM', '"sender@example.com"')
-
-# By subject
-status, messages = mail.search(None, 'SUBJECT', '"Invoice"')
-
-# Combined criteria
-status, messages = mail.search(None, '(UNSEEN FROM "accounting@company.com")')
-
-# Process results
-email_ids = messages[0].split()
-if not email_ids:
-    # No emails found
-    pass
-```
-
----
-
-## Read Email
-
-```python
-import email
-
-# Fetch email by ID
-email_id = email_ids[0]
-status, msg_data = mail.fetch(email_id, '(RFC822)')
-msg = email.message_from_bytes(msg_data[0][1])
-
-# Extract headers
-from_header = msg.get('From', '')
-subject = msg.get('Subject', '')
-date = msg.get('Date', '')
-```
-
----
-
-## Download Attachments
-
-```python
-# Find PDF attachments
-pdf_attachments = []
-
-for part in msg.walk():
-    if part.get_content_maintype() == 'multipart':
-        continue
-    if part.get('Content-Disposition') is None:
-        continue
-
-    filename = part.get_filename()
-    if filename and filename.lower().endswith('.pdf'):
-        pdf_data = part.get_payload(decode=True)
-        pdf_attachments.append({
-            'filename': filename,
-            'data': pdf_data,
-            'size': len(pdf_data)
-        })
-
-if pdf_attachments:
-    pdf = pdf_attachments[0]
-    print(json.dumps({
-        "status": "success",
-        "context_updates": {
-            "has_pdf": True,
-            "pdf_filename": pdf['filename'],
-            "pdf_data": pdf['data']
-        }
-    }))
-```
-
----
-
-## Manage Email State
-
-```python
-# Mark as read
-mail.store(email_id, '+FLAGS', '\\Seen')
-
-# Delete email
-mail.store(email_id, '+FLAGS', '\\Deleted')
-mail.expunge()
+# Select mailbox (default is INBOX)
+mail.select()
 
 # Always logout when done
 mail.logout()
@@ -123,106 +29,260 @@ mail.logout()
 
 ---
 
-## Whitelist Validation
+## Search for Emails
+
+Search emails using IMAP search criteria:
 
 ```python
-# Extract sender email
-from_header = msg.get('From', '')
-sender_email = from_header.split('<')[-1].strip('>')
+import imaplib
 
-# Check against whitelist
-if email_creds.sender_whitelist:
-    passes_whitelist = email_creds.sender_whitelist in sender_email
-else:
-    passes_whitelist = True
+mail = imaplib.IMAP4_SSL('imap.gmail.com')
+mail.login('user@example.com', 'password')
+mail.select()
+
+# Search for ALL emails
+typ, data = mail.search(None, 'ALL')
+email_ids = data[0].split()  # Returns list of email IDs
+
+# Search for UNSEEN (unread) emails
+typ, data = mail.search(None, 'UNSEEN')
+
+# Search by sender
+typ, data = mail.search(None, 'FROM', '"sender@example.com"')
+
+# Alternative syntax with parentheses
+typ, data = mail.search(None, '(FROM "sender@example.com")')
+
+# Search by subject
+typ, data = mail.search(None, 'SUBJECT', '"Invoice"')
+
+mail.close()
+mail.logout()
 ```
 
 ---
 
-## Complete Example
+## Fetch Email Content
+
+Retrieve email messages:
 
 ```python
 import imaplib
 import email
+
+mail = imaplib.IMAP4_SSL('imap.gmail.com')
+mail.login('user@example.com', 'password')
+mail.select()
+
+# Get all email IDs
+typ, data = mail.search(None, 'ALL')
+email_ids = data[0].split()
+
+# Fetch first email
+first_id = email_ids[0]
+typ, msg_data = mail.fetch(first_id, '(RFC822)')
+
+# Parse email message
+raw_email = msg_data[0][1]
+msg = email.message_from_bytes(raw_email)
+
+# Access email headers
+email_from = msg.get('From')
+email_subject = msg.get('Subject')
+email_date = msg.get('Date')
+
+print(f"From: {email_from}")
+print(f"Subject: {email_subject}")
+print(f"Date: {email_date}")
+
+mail.close()
+mail.logout()
+```
+
+---
+
+## Process Email Attachments
+
+Extract PDF attachments from emails:
+
+```python
+import imaplib
+import email
+import base64
+
+mail = imaplib.IMAP4_SSL('imap.gmail.com')
+mail.login('user@example.com', 'password')
+mail.select()
+
+# Search for unread emails
+typ, data = mail.search(None, 'UNSEEN')
+email_ids = data[0].split()
+
+if email_ids:
+    # Get first unread email
+    email_id = email_ids[0]
+    typ, msg_data = mail.fetch(email_id, '(RFC822)')
+    raw_email = msg_data[0][1]
+    msg = email.message_from_bytes(raw_email)
+
+    # Iterate through email parts
+    for part in msg.walk():
+        # Check if part is PDF attachment
+        if part.get_content_type() == 'application/pdf':
+            filename = part.get_filename()
+            pdf_data_bytes = part.get_payload(decode=True)
+
+            # Convert to base64 for NOVA storage
+            pdf_data_base64 = base64.b64encode(pdf_data_bytes).decode('utf-8')
+
+            print(f"Found PDF: {filename}")
+            print(f"Size: {len(pdf_data_bytes)} bytes")
+
+mail.close()
+mail.logout()
+```
+
+---
+
+## Mark Email as Read
+
+Change email flags:
+
+```python
+import imaplib
+
+mail = imaplib.IMAP4_SSL('imap.gmail.com')
+mail.login('user@example.com', 'password')
+mail.select()
+
+# Mark email as read (seen)
+email_id = b'123'
+mail.store(email_id, '+FLAGS', '\\Seen')
+
+# Mark email as unread
+mail.store(email_id, '-FLAGS', '\\Seen')
+
+mail.close()
+mail.logout()
+```
+
+---
+
+## Complete Example: Read Unread Emails with PDF Attachments
+
+```python
+import imaplib
+import email
+import base64
 import json
-from src.models.credentials import get_email_credentials
 
 try:
-    # Connect
-    email_creds = get_email_credentials(context['client_slug'])
-    mail = imaplib.IMAP4_SSL(email_creds.imap_host, email_creds.imap_port)
-    mail.login(email_creds.email_user, email_creds.email_password)
-    mail.select('INBOX')
+    # Read credentials from context
+    email_user = context.get("email_user")
+    email_password = context.get("email_password")
+    sender_whitelist = context.get("sender_whitelist")
 
-    # Search unread
-    status, messages = mail.search(None, 'UNSEEN')
+    # Connect to IMAP server
+    mail = imaplib.IMAP4_SSL("imap.gmail.com")
+    mail.login(email_user, email_password)
+    mail.select("inbox")
+
+    # Search for unread emails from specific sender
+    search_criteria = f'(UNSEEN FROM "{sender_whitelist}")'
+    status, messages = mail.search(None, search_criteria)
     email_ids = messages[0].split()
 
     if not email_ids:
-        print(json.dumps({
-            "status": "success",
-            "context_updates": {"has_emails": False}
-        }))
-    else:
-        # Read first email
-        email_id = email_ids[0]
-        status, msg_data = mail.fetch(email_id, '(RFC822)')
-        msg = email.message_from_bytes(msg_data[0][1])
+        raise ValueError("No unread emails found from the specified sender.")
 
-        # Extract data
-        from_header = msg.get('From', '')
-        subject = msg.get('Subject', '')
-        sender_email = from_header.split('<')[-1].strip('>')
+    # Fetch the first unread email
+    latest_email_id = email_ids[0]
+    status, msg_data = mail.fetch(latest_email_id, '(RFC822)')
+    msg = email.message_from_bytes(msg_data[0][1])
 
-        # Find PDF
-        has_pdf = False
-        pdf_data = None
-        pdf_filename = None
+    # Extract email metadata
+    email_from = msg.get("From", "")
+    email_subject = msg.get("Subject", "")
+    email_date = msg.get("Date", "")
 
-        for part in msg.walk():
-            if part.get_content_maintype() == 'multipart':
-                continue
-            if part.get('Content-Disposition') is None:
-                continue
-            filename = part.get_filename()
-            if filename and filename.lower().endswith('.pdf'):
-                has_pdf = True
-                pdf_data = part.get_payload(decode=True)
-                pdf_filename = filename
-                break
+    # Initialize PDF variables
+    has_pdf = False
+    pdf_filename = None
+    pdf_data = None
 
-        # Mark as read
-        mail.store(email_id, '+FLAGS', '\\Seen')
+    # Check for PDF attachments
+    for part in msg.walk():
+        if part.get_content_type() == "application/pdf":
+            has_pdf = True
+            pdf_filename = part.get_filename()
+            pdf_data = base64.b64encode(part.get_payload(decode=True)).decode('utf-8')
+            break
 
-        print(json.dumps({
-            "status": "success",
-            "context_updates": {
-                "email_from": from_header,
-                "email_subject": subject,
-                "has_pdf": has_pdf,
-                "pdf_filename": pdf_filename,
-                "pdf_data": pdf_data
-            }
-        }))
+    # Mark the email as read
+    mail.store(latest_email_id, '+FLAGS', '\\Seen')
 
+    mail.close()
     mail.logout()
 
+    # Return results
+    print(json.dumps({
+        "status": "success",
+        "context_updates": {
+            "email_from": email_from,
+            "email_subject": email_subject,
+            "email_date": email_date,
+            "has_pdf": has_pdf,
+            "pdf_filename": pdf_filename if has_pdf else None,
+            "pdf_data": pdf_data if has_pdf else None
+        },
+        "message": "Email processed successfully"
+    }))
+
 except imaplib.IMAP4.error as e:
-    print(json.dumps({"status": "error", "message": f"IMAP error: {str(e)}"}))
+    print(json.dumps({
+        "status": "error",
+        "context_updates": {},
+        "message": f"IMAP error: {str(e)}"
+    }))
+
 except Exception as e:
-    print(json.dumps({"status": "error", "message": f"Error: {str(e)}"}))
+    print(json.dumps({
+        "status": "error",
+        "context_updates": {},
+        "message": f"Unexpected error: {str(e)}"
+    }))
+```
+
+---
+
+## Response Format
+
+IMAP commands return tuples: `(type, [data, ...])`
+
+- **type**: Usually `'OK'` or `'NO'`
+- **data**: List of bytes or tuples containing message content
+
+Example:
+```python
+typ, data = mail.search(None, 'ALL')
+# typ = 'OK'
+# data = [b'1 2 3 4 5']  # Email IDs
 ```
 
 ---
 
 ## Key Points
 
-- **Always logout**: Call `mail.logout()` to close connection
-- **Check empty results**: Validate `email_ids` before accessing
-- **Validate attachments**: Check `Content-Disposition` before processing
-- **Handle errors**: Wrap in try/except for `imaplib.IMAP4.error`
+- **Always logout**: Call `mail.logout()` to close connection properly
+- **Select mailbox**: Call `mail.select()` before searching (defaults to INBOX)
+- **Email IDs are bytes**: Convert with `.split()` to get list
+- **Search syntax**: Use proper IMAP search syntax (case-insensitive)
+- **Mark as read**: Use `mail.store(email_id, '+FLAGS', '\\Seen')`
+- **PDF attachments**: Check `content_type == 'application/pdf'` and use `get_payload(decode=True)`
+- **Base64 encoding**: Store PDF data as base64 string in NOVA context
 
 ---
 
-**Integration**: IMAP (imaplib + email)
-**Use with**: Email processing workflows, invoice automation
+**Integration**: IMAP Email Reading (imaplib + email)
+**Use with**: Invoice processing, email automation, attachment extraction
+**Official Docs**: https://docs.python.org/3/library/imaplib.html
