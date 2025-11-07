@@ -4,6 +4,7 @@ REST API endpoints for NOVA
 """
 
 from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -179,6 +180,24 @@ curl https://your-api.com/executions/{execution_id}/chain
             "description": "Execution history and Chain of Work. View completed/failed executions."
         }
     ]
+)
+
+# ============================================================================
+# MIDDLEWARE - CORS Configuration
+# ============================================================================
+
+# Configure CORS to allow frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # Local development (Next.js default)
+        "http://localhost:5173",  # Local development (Vite default)
+        "https://nova-dashboard.vercel.app",  # Production frontend (Vercel)
+        # Add more origins as needed
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"],  # Allow all headers
 )
 
 

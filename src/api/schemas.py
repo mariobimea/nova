@@ -124,6 +124,7 @@ class ChainOfWorkEntry(BaseModel):
     error_message: Optional[str]
     decision_result: Optional[str]
     path_taken: Optional[str]
+    ai_metadata: Optional[Dict[str, Any]]  # AI generation metadata (model, tokens, cost, etc.)
     timestamp: datetime
 
     class Config:
