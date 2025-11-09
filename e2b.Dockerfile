@@ -1,30 +1,32 @@
-# NOVA Workflow Engine - E2B Sandbox Template
-# Optimized template with pre-installed packages for workflow automation
-# Based on E2B code-interpreter with additional libraries
+# NOVA Workflow Engine - E2B Custom Template
+# Clean template with minimal packages for fast cold start
 #
-# This template includes:
-# - PDF processing (PyMuPDF)
-# - HTTP requests (requests)
-# - Data manipulation (pandas)
-# - Image processing (pillow)
-# - PostgreSQL database (psycopg2-binary)
-# - Environment variables (python-dotenv)
+# Packages included:
+# - PyMuPDF (PDF processing)
+# - requests (HTTP/APIs)
+# - pandas (Data analysis)
+# - pillow (Image processing)
+# - psycopg2-binary (PostgreSQL)
+# - python-dotenv (Environment config)
 #
-# Pre-installing these packages reduces cold start time from ~6s to ~1.5s
+# Based on: e2bdev/code-interpreter:latest
+# Build: e2b template build --name "nova-engine" -c "/root/.jupyter/start-up.sh"
 
 FROM e2bdev/code-interpreter:latest
 
 # Set working directory
 WORKDIR /home/user
 
-# Update package lists and install system dependencies
-# Combine RUN commands to reduce Docker layers
+# Install system dependencies (minimize layers)
 RUN apt-get update && \
-    apt-get install -y gcc && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    make && \
     rm -rf /var/lib/apt/lists/*
 
-# Pre-install Python packages for NOVA workflows
-# Pin versions for reproducibility and stability
+# Install Python packages with pinned versions
+# Use --no-cache-dir to reduce image size
 RUN pip install --no-cache-dir \
     PyMuPDF==1.24.0 \
     requests==2.31.0 \
@@ -33,9 +35,8 @@ RUN pip install --no-cache-dir \
     psycopg2-binary==2.9.10 \
     python-dotenv==1.0.0
 
-# Verify all packages installed successfully
-# This will fail the build if any package is missing
-RUN python -c "import fitz; import requests; import pandas; import PIL; import psycopg2; import dotenv; print('✅ All packages installed successfully')"
+# Verification step (fails build if packages missing)
+RUN python -c "import fitz; import requests; import pandas; from PIL import Image; import psycopg2; from dotenv import load_dotenv; print('All packages verified')"
 
-# Set default working directory for code execution
+# Set final working directory
 WORKDIR /home/user

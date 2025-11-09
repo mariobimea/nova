@@ -726,9 +726,10 @@ print(json.dumps(context, ensure_ascii=True))
             CodeExecutionError: User code errors (syntax, runtime)
             E2BSandboxError: Other E2B errors
         """
-        from e2b_code_interpreter import Sandbox
+        from e2b import Sandbox
 
         sandbox_id = None
+        sandbox = None
 
         try:
             # Create sandbox - v2.x API is synchronous
@@ -742,127 +743,152 @@ print(json.dumps(context, ensure_ascii=True))
             logger.debug("Creating E2B sandbox...")
 
             try:
-                # Use context manager for automatic cleanup
-                with Sandbox.create(**create_kwargs) as sandbox:
-                    sandbox_id = sandbox.id if hasattr(sandbox, 'id') else "unknown"
-                    logger.debug(f"E2B sandbox created: {sandbox_id}")
+                # Create sandbox (not using context manager to have better error handling)
+                sandbox = Sandbox.create(**create_kwargs)
+                sandbox_id = sandbox.id if hasattr(sandbox, 'id') else "unknown"
+                logger.debug(f"E2B sandbox created: {sandbox_id}")
 
-                    # Execute code with timeout (synchronous in v2.x)
-                    logger.debug(f"Executing code in sandbox {sandbox_id} (timeout: {timeout}s)")
-                    execution = sandbox.run_code(full_code, timeout=timeout)
+                # Execute code using commands.run() instead of run_code()
+                logger.debug(f"Executing code in sandbox {sandbox_id} (timeout: {timeout}s)")
 
-                    # Check for errors
-                    if execution.error:
-                        error_name = execution.error.name if hasattr(execution.error, 'name') else "Error"
-                        error_value = execution.error.value if hasattr(execution.error, 'value') else str(execution.error)
+                # Write code to a temp file and execute it
+                # This avoids issues with quotes and special characters
+                import tempfile
+                code_file = f"/tmp/nova_code_{sandbox_id}.py"
 
-                        error_msg = f"{error_name}: {error_value}"
+                # Upload code to sandbox
+                sandbox.files.write(code_file, full_code)
 
-                        logger.error(f"E2B code execution error in sandbox {sandbox_id}: {error_msg}")
+                # Execute the file
+                execution = sandbox.commands.run(f"python3 {code_file}", timeout=timeout)
 
-                        # Classify user code errors vs sandbox errors
-                        if error_name in ("SyntaxError", "NameError", "TypeError", "ValueError", "AttributeError", "KeyError", "IndexError"):
-                            # User code error - don't retry
-                            raise CodeExecutionError(
-                                message=f"Code execution failed: {error_msg}",
-                                code=full_code,
-                                error_details=error_msg
-                            )
-                        else:
-                            # Sandbox error - retry
-                            raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
+                # Check for errors (commands.run returns exit_code, stdout, stderr)
+                if execution.exit_code != 0:
+                    error_msg = execution.stderr or "Unknown error"
 
-                    # Get output from stdout
-                    # In v2.x, logs.stdout is a list of strings
-                    stdout_lines = []
-                    if hasattr(execution, 'logs') and execution.logs:
-                        if hasattr(execution.logs, 'stdout'):
-                            if isinstance(execution.logs.stdout, list):
-                                stdout_lines = [line.strip() for line in execution.logs.stdout if line.strip()]
-                            elif isinstance(execution.logs.stdout, str):
-                                stdout_lines = [line.strip() for line in execution.logs.stdout.split('\n') if line.strip()]
+                    logger.error(f"E2B code execution error in sandbox {sandbox_id}: {error_msg}")
 
-                    if not stdout_lines:
-                        error_msg = f"E2B sandbox {sandbox_id} returned empty output"
-                        logger.error(error_msg)
-                        raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
-
-                    # Filter out empty JSON objects from stdout_lines
-                    # Sometimes AI-generated code adds print(json.dumps(context)) which prints {}
-                    valid_lines = []
-                    for line in stdout_lines:
-                        # Skip empty JSON objects
-                        if line.strip() in ['{}', '[]', 'null']:
-                            continue
-                        valid_lines.append(line)
-
-                    if not valid_lines:
-                        error_msg = f"E2B sandbox {sandbox_id} returned only empty JSON"
-                        logger.error(error_msg)
-                        raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
-
-                    # The last VALID line should be our JSON output
-                    output = valid_lines[-1]
-
-                    # Parse updated context
-                    try:
-                        output_json = json.loads(output)
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse E2B output as JSON: {output}")
-                        if hasattr(execution, 'logs') and execution.logs:
-                            logger.error(f"Full stdout: {execution.logs.stdout}")
-
-                        # This is a user code error (didn't print valid JSON)
+                    # Classify user code errors vs sandbox errors
+                    if any(err in error_msg for err in ["SyntaxError", "NameError", "TypeError", "ValueError", "AttributeError", "KeyError", "IndexError"]):
+                        # User code error - don't retry
                         raise CodeExecutionError(
-                            message=f"Code output is not valid JSON: {e}",
+                            message=f"Code execution failed: {error_msg}",
                             code=full_code,
-                            error_details=f"Output: {output}"
+                            error_details=error_msg
                         )
-
-                    # Check if output has the expected structure: {status, context_updates, message}
-                    # If it does, extract context_updates. Otherwise, use the whole JSON as context.
-                    if isinstance(output_json, dict) and "context_updates" in output_json:
-                        # AI-generated code format: {status, context_updates, message}
-                        updated_context = output_json.get("context_updates", {})
-
-                        # Log status and message if present
-                        status = output_json.get("status")
-                        message = output_json.get("message")
-                        if status:
-                            logger.debug(f"Execution status: {status}")
-                        if message:
-                            logger.debug(f"Execution message: {message}")
-
-                        # If status is "error", log it but still return context_updates
-                        if status == "error":
-                            logger.warning(f"Code reported error status: {message}")
                     else:
-                        # Legacy format or direct context update
-                        updated_context = output_json
+                        # Sandbox error - retry
+                        raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
 
-                    logger.debug(f"E2B execution successful in sandbox {sandbox_id}")
-                    logger.debug(f"Updated context keys: {list(updated_context.keys())}")
+                # Get output from stdout
+                stdout_output = execution.stdout or ""
+                stdout_lines = [line.strip() for line in stdout_output.split('\n') if line.strip()]
 
-                    return updated_context
+                if not stdout_lines:
+                    error_msg = f"E2B sandbox {sandbox_id} returned empty output"
+                    logger.error(error_msg)
+                    raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
+
+                # Filter out empty JSON objects from stdout_lines
+                # Sometimes AI-generated code adds print(json.dumps(context)) which prints {}
+                valid_lines = []
+                for line in stdout_lines:
+                    # Skip empty JSON objects
+                    if line.strip() in ['{}', '[]', 'null']:
+                        continue
+                    valid_lines.append(line)
+
+                if not valid_lines:
+                    error_msg = f"E2B sandbox {sandbox_id} returned only empty JSON"
+                    logger.error(error_msg)
+                    raise E2BSandboxError(error_msg, sandbox_id=sandbox_id)
+
+                # The last VALID line should be our JSON output
+                output = valid_lines[-1]
+
+                # Parse updated context
+                try:
+                    output_json = json.loads(output)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse E2B output as JSON: {output}")
+                    logger.error(f"Full stdout: {stdout_output}")
+
+                    # This is a user code error (didn't print valid JSON)
+                    raise CodeExecutionError(
+                        message=f"Code output is not valid JSON: {e}",
+                        code=full_code,
+                        error_details=f"Output: {output}"
+                    )
+
+                # Check if output has the expected structure: {status, context_updates, message}
+                # If it does, extract context_updates. Otherwise, use the whole JSON as context.
+                if isinstance(output_json, dict) and "context_updates" in output_json:
+                    # AI-generated code format: {status, context_updates, message}
+                    updated_context = output_json.get("context_updates", {})
+
+                    # Log status and message if present
+                    status = output_json.get("status")
+                    message = output_json.get("message")
+                    if status:
+                        logger.debug(f"Execution status: {status}")
+                    if message:
+                        logger.debug(f"Execution message: {message}")
+
+                    # If status is "error", log it but still return context_updates
+                    if status == "error":
+                        logger.warning(f"Code reported error status: {message}")
+                else:
+                    # Legacy format or direct context update
+                    updated_context = output_json
+
+                logger.debug(f"E2B execution successful in sandbox {sandbox_id}")
+                logger.debug(f"Updated context keys: {list(updated_context.keys())}")
+
+                # Kill sandbox
+                sandbox.kill()
+
+                return updated_context
 
             except TimeoutError as e:
                 # Sandbox creation or execution timeout
                 logger.error(f"E2B timeout: {e}")
+                if sandbox:
+                    try:
+                        sandbox.kill()
+                    except:
+                        pass
                 raise E2BTimeoutError(f"E2B timeout after {timeout}s: {e}", timeout_seconds=timeout)
 
             except ConnectionError as e:
                 # Network/connection error
                 logger.error(f"E2B connection error: {e}")
+                if sandbox:
+                    try:
+                        sandbox.kill()
+                    except:
+                        pass
                 raise E2BConnectionError(f"E2B connection failed: {e}")
 
         except (E2BConnectionError, E2BTimeoutError, CodeExecutionError, E2BSandboxError):
-            # Already classified - re-raise
+            # Already classified - clean up sandbox and re-raise
+            if sandbox:
+                try:
+                    sandbox.kill()
+                except:
+                    pass
             raise
 
         except Exception as e:
             # Unexpected error
             error_msg = f"E2B unexpected error in sandbox {sandbox_id or 'unknown'}: {e}"
             logger.exception(error_msg)
+
+            # Clean up sandbox
+            if sandbox:
+                try:
+                    sandbox.kill()
+                except:
+                    pass
 
             # Try to classify
             error_str = str(e).lower()
