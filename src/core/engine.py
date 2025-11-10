@@ -292,6 +292,10 @@ class GraphEngine:
                 if "_ai_metadata" in updated_context:
                     logger.info(f"   _ai_metadata present: {updated_context['_ai_metadata']}")
 
+                # DEBUG: Store for inspection in chain_of_work
+                metadata["_debug_raw_keys"] = list(updated_context.keys())
+                metadata["_debug_raw_context"] = str(updated_context)[:500]  # First 500 chars
+
                 # Extract AI metadata if present (only for CachedExecutor)
                 ai_metadata = updated_context.pop("_ai_metadata", None)
                 if ai_metadata:
