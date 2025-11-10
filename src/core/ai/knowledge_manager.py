@@ -75,7 +75,12 @@ class KnowledgeManager:
         Detect which integration documentation files are needed.
 
         Uses keyword-based detection from task string and context keys.
-        No limit on number of integrations.
+
+        SMART DETECTION for PDF extraction:
+        - If context has 'recommended_extraction_method' = 'pymupdf' → load only 'pdf' docs
+        - If context has 'recommended_extraction_method' = 'ocr' → load only 'ocr' docs
+        - If context has both 'pdf_data' and mentions method in task → load specific doc
+        - Otherwise → use standard keyword detection
 
         Args:
             task: Task description/prompt from user
@@ -92,10 +97,10 @@ class KnowledgeManager:
         integration_keywords = {
             'imap': ['email', 'imap', 'inbox', 'read email', 'unread', 'fetch email'],
             'smtp': ['send email', 'smtp', 'reply', 'notification', 'send mail'],
-            'pdf': ['pdf', 'invoice', 'extract', 'document'],
+            'pdf': ['pdf', 'pymupdf', 'fitz', 'text layer'],
             'postgres': ['database', 'db', 'save', 'store', 'query', 'insert', 'update', 'postgres', 'sql'],
             'regex': ['pattern', 'regex', 'search text', 'extract amount', 'find', 'match'],
-            'ocr': ['ocr', 'scan', 'scanned', 'image', 'extract text', 'read text', 'recognize', 'optical', 'easyocr', 'handwritten']
+            'ocr': ['ocr', 'easyocr', 'scan', 'scanned', 'image to text', 'recognize text', 'optical']
         }
 
         for integration, keywords in integration_keywords.items():
@@ -108,10 +113,10 @@ class KnowledgeManager:
         context_key_hints = {
             'imap': ['email_subject', 'email_from', 'email_date', 'has_emails'],
             'smtp': ['smtp_host', 'smtp_port', 'rejection_reason'],
-            'pdf': ['pdf_data', 'pdf_filename', 'pdf_text'],
+            'pdf': ['pdf_filename', 'pdf_text'],
             'postgres': ['invoice_id', 'db_table', 'sql_query'],
             'regex': ['pdf_text', 'total_amount', 'amount_found'],
-            'ocr': ['invoice_image_path', 'image_path', 'scanned_pdf', 'ocr_text', 'scanned_document']
+            'ocr': ['invoice_image_path', 'image_path', 'scanned_pdf']
         }
 
         for integration, hint_keys in context_key_hints.items():
@@ -119,6 +124,20 @@ class KnowledgeManager:
                 if hint_key in context:
                     detected.add(integration)
                     break
+
+        # SMART RULE: Override PDF/OCR detection based on recommended_extraction_method
+        # This comes from the check_pdf_type node and tells us exactly which method to use
+        recommended_method = context.get('recommended_extraction_method')
+
+        if recommended_method == 'pymupdf':
+            # PDF digital → Use PyMuPDF, remove OCR if it was detected
+            detected.add('pdf')
+            detected.discard('ocr')  # Remove OCR to save tokens
+
+        elif recommended_method == 'ocr':
+            # PDF scanned/hybrid → Use OCR, remove PDF if it was detected
+            detected.add('ocr')
+            detected.discard('pdf')  # Remove PDF to save tokens
 
         return sorted(list(detected))  # Sort for consistency
 

@@ -1,0 +1,142 @@
+{
+  "name": "Invoice Processing - Improved",
+  "description": "Workflow mejorado con detección automática de tipo de PDF",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "label": "Start"
+    },
+    {
+      "id": "read_email_and_extract_pdf",
+      "type": "action",
+      "label": "Read Email and Extract PDF",
+      "executor": "cached",
+      "prompt": "Connect to IMAP server and read the first unread email from mario@bimea.es only. Extract email metadata (From, Subject, Date). If the email has a PDF attachment, extract it and encode to base64. Then mark the email as read. Store in context: email_from (string), email_subject (string), email_date (string), has_pdf (boolean), pdf_filename (string if PDF exists), pdf_data (base64 string if PDF exists). Store only primitive values, never objects.",
+      "timeout": 60
+    },
+    {
+      "id": "has_pdf_decision",
+      "type": "decision",
+      "label": "Has PDF?",
+      "executor": "cached",
+      "prompt": "Set branch_decision to True if has_pdf is True, False otherwise.",
+      "timeout": 5
+    },
+    {
+      "id": "send_rejection_email",
+      "type": "action",
+      "label": "Send Rejection Email",
+      "executor": "cached",
+      "prompt": "Send rejection email to email_from explaining that the email doesn't contain a PDF attachment. Ask them to resend with PDF. Use SMTP with TLS.",
+      "timeout": 30
+    },
+    {
+      "id": "check_pdf_type",
+      "type": "action",
+      "label": "Check PDF Type",
+      "executor": "e2b",
+      "code": "import pymupdf\nimport io\nimport base64\nimport json\n\ntry:\n    # Decode PDF from base64\n    pdf_data_base64 = context['pdf_data']\n    pdf_bytes = base64.b64decode(pdf_data_base64)\n    \n    # Open PDF\n    pdf_stream = io.BytesIO(pdf_bytes)\n    doc = pymupdf.open(stream=pdf_stream, filetype='pdf')\n    \n    # Extract text from first page\n    first_page_text = doc[0].get_text()\n    text_length = len(first_page_text.strip())\n    \n    doc.close()\n    \n    # Classify PDF based on text amount\n    if text_length > 100:\n        pdf_type = 'digital'\n        recommended_method = 'pymupdf'\n    elif text_length > 0:\n        pdf_type = 'hybrid'\n        recommended_method = 'ocr'\n    else:\n        pdf_type = 'scanned'\n        recommended_method = 'ocr'\n    \n    # Update context\n    context['pdf_type'] = pdf_type\n    context['pdf_text_length'] = text_length\n    context['pdf_has_text_layer'] = text_length > 0\n    context['recommended_extraction_method'] = recommended_method\n    \nexcept Exception as e:\n    context['pdf_type'] = 'unknown'\n    context['recommended_extraction_method'] = 'pymupdf'\n    context['check_pdf_error'] = str(e)",
+      "timeout": 30
+    },
+    {
+      "id": "extract_text_from_pdf",
+      "type": "action",
+      "label": "Extract Text from PDF",
+      "executor": "cached",
+      "prompt": "Extract text from the PDF. Use the method specified in 'recommended_extraction_method' from context (either 'pymupdf' or 'ocr'). Store the extracted text in 'ocr_text' and the method used in 'extraction_method_used'.",
+      "timeout": 90
+    },
+    {
+      "id": "find_total_amount",
+      "type": "action",
+      "label": "Find Total Amount",
+      "executor": "cached",
+      "prompt": "Find the total invoice amount from ocr_text. Handle amounts with or without decimals (e.g. 850, 850.50, 1234.56). Set to 0.0 if not found.",
+      "timeout": 30
+    },
+    {
+      "id": "amount_decision",
+      "type": "decision",
+      "label": "Amount > €1000?",
+      "executor": "cached",
+      "prompt": "Set branch_decision to True if total_amount > 1000, False otherwise.",
+      "timeout": 5
+    },
+    {
+      "id": "send_high_budget_email",
+      "type": "action",
+      "label": "Send High Budget Email",
+      "executor": "cached",
+      "prompt": "Send email to email_from notifying that the invoice amount exceeds €1000 threshold and will require manual review. Use SMTP with TLS.",
+      "timeout": 30
+    },
+    {
+      "id": "save_invoice_to_db",
+      "type": "action",
+      "label": "Save Invoice to Database",
+      "executor": "cached",
+      "prompt": "Save invoice to PostgreSQL 'invoices' table. Decode PDF from base64 to bytea. Use the extraction_method_used value from context for ocr_method field. Set currency='EUR'. Return the inserted ID.",
+      "timeout": 60
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "label": "End"
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "read_email_and_extract_pdf"
+    },
+    {
+      "from": "read_email_and_extract_pdf",
+      "to": "has_pdf_decision"
+    },
+    {
+      "from": "has_pdf_decision",
+      "to": "send_rejection_email",
+      "condition": "false"
+    },
+    {
+      "from": "has_pdf_decision",
+      "to": "check_pdf_type",
+      "condition": "true"
+    },
+    {
+      "from": "send_rejection_email",
+      "to": "end"
+    },
+    {
+      "from": "check_pdf_type",
+      "to": "extract_text_from_pdf"
+    },
+    {
+      "from": "extract_text_from_pdf",
+      "to": "find_total_amount"
+    },
+    {
+      "from": "find_total_amount",
+      "to": "amount_decision"
+    },
+    {
+      "from": "amount_decision",
+      "to": "send_high_budget_email",
+      "condition": "true"
+    },
+    {
+      "from": "amount_decision",
+      "to": "save_invoice_to_db",
+      "condition": "false"
+    },
+    {
+      "from": "send_high_budget_email",
+      "to": "end"
+    },
+    {
+      "from": "save_invoice_to_db",
+      "to": "end"
+    }
+  ]
+}
