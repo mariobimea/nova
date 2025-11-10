@@ -305,7 +305,17 @@ class GraphEngine:
                 if "context_updates" in updated_context:
                     # Extract the actual updates from the wrapper
                     actual_updates = updated_context.get("context_updates", {})
+
+                    # DEBUG: Log what we're about to update
+                    logger.info(f"🔍 DEBUG before context.update() for node {node.id}:")
+                    logger.info(f"   actual_updates keys: {list(actual_updates.keys())}")
+                    logger.info(f"   actual_updates content: {actual_updates}")
+                    logger.info(f"   context BEFORE update: {list(context.get_all().keys())}")
+
                     context.update(actual_updates)
+
+                    logger.info(f"   context AFTER update: {list(context.get_all().keys())}")
+                    logger.info(f"   Did context gain new keys? {set(context.get_all().keys()) - set(input_context.keys())}")
                 else:
                     # Traditional format - update directly
                     context.update(updated_context)
