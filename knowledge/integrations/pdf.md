@@ -6,6 +6,39 @@ Extract text and data from PDF files using PyMuPDF (fitz) in NOVA workflows.
 
 ---
 
+## When to Use PyMuPDF vs OCR
+
+**Use PyMuPDF (this integration)** when:
+- ✅ PDF has text layer (digital PDFs created from software)
+- ✅ Need fast text extraction (10-100x faster than OCR)
+- ✅ PDF contains selectable text
+- ✅ Forms, tables, and structured data
+
+**Use EasyOCR** (see `/integrations/ocr.md`) when:
+- ✅ PDF is scanned/image-based (no text layer)
+- ✅ Handwritten documents
+- ✅ Low-quality scans that need recognition
+- ✅ Photos of documents
+
+**How to check if PDF has text layer:**
+```python
+import pymupdf
+
+doc = pymupdf.open("document.pdf")
+text = doc[0].get_text()  # Get text from first page
+
+if text.strip():
+    # PDF has text layer - use PyMuPDF
+    print("Digital PDF - use PyMuPDF extraction")
+else:
+    # PDF is scanned image - use OCR
+    print("Scanned PDF - use EasyOCR (see /integrations/ocr.md)")
+
+doc.close()
+```
+
+---
+
 ## Basic Usage: Open PDF and Extract Text
 
 Import the library as `pymupdf` (or `fitz` for backward compatibility):

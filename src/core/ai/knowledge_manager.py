@@ -94,7 +94,8 @@ class KnowledgeManager:
             'smtp': ['send email', 'smtp', 'reply', 'notification', 'send mail'],
             'pdf': ['pdf', 'invoice', 'extract', 'document'],
             'postgres': ['database', 'db', 'save', 'store', 'query', 'insert', 'update', 'postgres', 'sql'],
-            'regex': ['pattern', 'regex', 'search text', 'extract amount', 'find', 'match']
+            'regex': ['pattern', 'regex', 'search text', 'extract amount', 'find', 'match'],
+            'ocr': ['ocr', 'scan', 'scanned', 'image', 'extract text', 'read text', 'recognize', 'optical', 'easyocr', 'handwritten']
         }
 
         for integration, keywords in integration_keywords.items():
@@ -109,7 +110,8 @@ class KnowledgeManager:
             'smtp': ['smtp_host', 'smtp_port', 'rejection_reason'],
             'pdf': ['pdf_data', 'pdf_filename', 'pdf_text'],
             'postgres': ['invoice_id', 'db_table', 'sql_query'],
-            'regex': ['pdf_text', 'total_amount', 'amount_found']
+            'regex': ['pdf_text', 'total_amount', 'amount_found'],
+            'ocr': ['invoice_image_path', 'image_path', 'scanned_pdf', 'ocr_text', 'scanned_document']
         }
 
         for integration, hint_keys in context_key_hints.items():

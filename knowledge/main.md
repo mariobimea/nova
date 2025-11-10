@@ -32,6 +32,11 @@ The following Python packages are pre-installed and ready to use:
 
 **PDF Processing**:
 - `pymupdf` (import as `fitz`) - PDF text extraction, form parsing
+- `pdf2image` - Convert PDF pages to images
+
+**OCR (Optical Character Recognition)**:
+- `easyocr` - OCR for Spanish and English (90-95% accuracy)
+- `torch` - PyTorch deep learning backend (CPU-only)
 
 **Database**:
 - `psycopg2` - PostgreSQL database driver
@@ -42,6 +47,10 @@ The following Python packages are pre-installed and ready to use:
 - `os`, `sys` - System utilities (standard library)
 
 For detailed API documentation on specific integrations, see the `/integrations/` and `/libraries/` documentation folders.
+
+**Important Notes:**
+- **OCR (EasyOCR)**: Use `gpu=False` parameter (sandbox is CPU-only). Pre-downloaded models for Spanish and English.
+- **PDF vs OCR**: Use PyMuPDF for PDFs with text layer (faster). Use EasyOCR for scanned PDFs without text layer.
 
 ---
 
