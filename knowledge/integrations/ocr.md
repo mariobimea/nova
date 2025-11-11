@@ -134,41 +134,62 @@ reader.readtext(
 
 ## Common Use Cases
 
-### Use Case 1: Extract Text from Scanned PDF
+### Use Case 1: Extract Text from Scanned PDF (Using pdf_data from Context)
+
+**IMPORTANT**: In NOVA workflows, PDFs are stored as `pdf_data` (base64-encoded string in context).
+You MUST decode it to bytes, then convert PDF pages to images using PyMuPDF.
 
 ```python
 import easyocr
-import fitz  # PyMuPDF
-from pdf2image import convert_from_path
+import pymupdf  # PyMuPDF (also known as 'fitz')
+import base64
+import io
 import json
+import numpy as np
+from PIL import Image
 
 try:
-    # Get PDF path from context
-    pdf_path = context.get("pdf_path")
+    # Get PDF data from context (base64 string)
+    pdf_data_base64 = context.get("pdf_data")
 
-    if not pdf_path:
-        raise ValueError("Missing pdf_path in context")
+    if not pdf_data_base64:
+        raise ValueError("Missing pdf_data in context")
 
-    # Initialize reader (CPU-only)
+    # Decode base64 to bytes
+    pdf_data = base64.b64decode(pdf_data_base64)
+
+    # Open PDF from bytes
+    pdf_stream = io.BytesIO(pdf_data)
+    doc = pymupdf.open(stream=pdf_stream, filetype='pdf')
+
+    # Initialize EasyOCR reader (CPU-only)
     reader = easyocr.Reader(['es', 'en'], gpu=False)
 
-    # Convert PDF to images (one image per page)
-    images = convert_from_path(pdf_path, dpi=200)
-
-    # Extract text from all pages
+    # Extract text from all pages using OCR
     all_text = []
 
-    for page_num, image in enumerate(images, start=1):
-        # Convert PIL Image to numpy array
-        import numpy as np
-        img_array = np.array(image)
+    for page_num in range(doc.page_count):
+        page = doc[page_num]
 
-        # Extract text from page
+        # Convert PDF page to image (pixmap)
+        pix = page.get_pixmap(dpi=200)  # 200 DPI for good quality
+
+        # Convert pixmap to PIL Image
+        img_data = pix.tobytes("png")
+        img = Image.open(io.BytesIO(img_data))
+
+        # Convert PIL Image to numpy array (EasyOCR accepts numpy arrays)
+        img_array = np.array(img)
+
+        # Extract text from page using OCR
         result = reader.readtext(img_array, detail=0, paragraph=True)
 
         # Join results
         page_text = '\n'.join(result)
         all_text.append(page_text)
+
+    # Close PDF
+    doc.close()
 
     # Combine all pages
     full_text = '\n\n--- PAGE BREAK ---\n\n'.join(all_text)
@@ -178,10 +199,10 @@ try:
         "status": "success",
         "context_updates": {
             "ocr_text": full_text,
-            "page_count": len(images),
+            "page_count": doc.page_count,
             "ocr_method": "EasyOCR"
         },
-        "message": f"Extracted text from {len(images)} pages using OCR"
+        "message": f"Extracted text from {doc.page_count} pages using OCR"
     }))
 
 except Exception as e:
@@ -191,6 +212,14 @@ except Exception as e:
         "message": f"OCR extraction failed: {str(e)}"
     }))
 ```
+
+**Key Steps:**
+1. Decode `pdf_data` (base64 string) → bytes
+2. Open PDF with PyMuPDF from bytes
+3. Convert each page to image using `page.get_pixmap()`
+4. Convert pixmap to PIL Image → numpy array
+5. Pass numpy array to `reader.readtext()`
+6. Always close the PDF with `doc.close()`
 
 ### Use Case 2: Extract Specific Fields (Invoice Total)
 

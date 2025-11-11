@@ -129,19 +129,19 @@ class KnowledgeManager:
                     detected.add(integration)
                     break
 
-        # SMART RULE: Override PDF/OCR detection based on recommended_extraction_method
+        # SMART RULE: Add recommended method if specified in context
         # This comes from the check_pdf_type node and tells us exactly which method to use
         recommended_method = context.get('recommended_extraction_method')
 
         if recommended_method == 'pymupdf':
-            # PDF digital → Use PyMuPDF, remove OCR if it was detected
+            # PDF digital → Use PyMuPDF
             detected.add('pdf')
-            detected.discard('ocr')  # Remove OCR to save tokens
+            # Note: Don't remove OCR - it might still be useful for hybrid PDFs
 
         elif recommended_method == 'ocr':
-            # PDF scanned/hybrid → Use OCR, remove PDF if it was detected
+            # PDF scanned/hybrid → Use OCR
             detected.add('ocr')
-            detected.discard('pdf')  # Remove PDF to save tokens
+            # Note: Don't remove PDF - OCR needs PDF library to convert pages to images
 
         # DEPENDENCY SYSTEM: Automatically load required integrations
         # Define which integrations depend on others

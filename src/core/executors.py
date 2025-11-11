@@ -391,6 +391,16 @@ class CachedExecutor(ExecutorStrategy):
             try:
                 logger.info(f"Attempt {attempt}/3: Generating code...")
 
+                # DEBUG: Log context being passed to AI
+                logger.info(f"📊 Context passed to AI (attempt {attempt}):")
+                for key, value in context.items():
+                    if isinstance(value, str) and len(value) > 100:
+                        logger.info(f"   {key}: <string, {len(value)} chars>")
+                    elif isinstance(value, bytes):
+                        logger.info(f"   {key}: <bytes, {len(value)} bytes>")
+                    else:
+                        logger.info(f"   {key}: {value}")
+
                 # 1. Build complete prompt with knowledge
                 full_prompt = self.knowledge_manager.build_prompt(
                     task=prompt_task,

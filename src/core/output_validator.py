@@ -8,8 +8,7 @@ This module provides ZERO-CONFIGURATION validation that detects false positives:
 
 NO manual configuration needed - all validations are automatic based on:
 1. Context comparison (before vs after)
-2. Task keywords analysis
-3. Output content inspection
+2. Output content inspection (non-empty values)
 """
 
 import logging
@@ -49,7 +48,6 @@ def auto_validate_output(
     Checks performed:
     1. ✅ Were any new fields added to context?
     2. ✅ Are the new fields non-empty and meaningful?
-    3. ✅ Do field names match task expectations (e.g., "ocr_text" for OCR tasks)?
 
     Args:
         task: The task description (natural language prompt)
@@ -175,43 +173,12 @@ def auto_validate_output(
     logger.debug(f"✅ Check 2 passed: Fields have valid content (suspicion score: {suspicion_score})")
 
     # ========================================
-    # CHECK 3: Specific field expectations based on task
+    # CHECK 3: REMOVED - Field name expectations
     # ========================================
-    task_lower = task.lower()
-
-    # If task mentions "ocr" or "extract text", expect "ocr_text" or similar
-    if 'ocr' in task_lower or 'extract text' in task_lower:
-        text_fields = [f for f in new_or_updated_fields if 'text' in f.lower() or 'ocr' in f.lower()]
-
-        if not text_fields:
-            warnings.append(
-                f"Task mentions OCR/text extraction but no text field found in output. "
-                f"Modified fields: {list(new_or_updated_fields)}"
-            )
-            suspicion_score += 3
-        else:
-            # Check if text field has meaningful content
-            for field in text_fields:
-                text_value = context_after_clean[field]
-                if isinstance(text_value, str) and len(text_value) < 5:
-                    warnings.append(
-                        f"Text field '{field}' is too short ({len(text_value)} chars): '{text_value}'"
-                    )
-                    suspicion_score += 2
-
-    # If task mentions "amount" or "total", expect numeric field
-    if any(keyword in task_lower for keyword in ['amount', 'total', 'price', 'cost']):
-        numeric_fields = [
-            f for f in new_or_updated_fields
-            if 'amount' in f.lower() or 'total' in f.lower() or 'price' in f.lower()
-        ]
-
-        if not numeric_fields:
-            warnings.append(
-                f"Task mentions amount/total but no amount field found. "
-                f"Modified fields: {list(new_or_updated_fields)}"
-            )
-            suspicion_score += 2
+    # We removed this check because it was too prescriptive.
+    # The AI should be free to name fields as it sees fit, as long as:
+    # - It adds/modifies fields (CHECK 1)
+    # - Fields are not critically empty (CHECK 2)
 
     # ========================================
     # FINAL DECISION
@@ -236,6 +203,6 @@ def auto_validate_output(
         suspicion_score=suspicion_score,
         details={
             "new_or_updated_fields": list(new_or_updated_fields),
-            "checks_passed": ["fields_modified", "fields_not_critically_empty", "field_names_match_task"]
+            "checks_passed": ["fields_modified", "fields_not_critically_empty"]
         }
     )
