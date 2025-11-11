@@ -19,8 +19,8 @@
       "id": "has_pdf_decision",
       "type": "decision",
       "label": "Has PDF?",
-      "executor": "cached",
-      "prompt": "Set branch_decision to True if has_pdf is True, False otherwise.",
+      "executor": "static",
+      "code": "context['branch_decision'] = context.get('has_pdf', False)",
       "timeout": 5
     },
     {
@@ -36,7 +36,7 @@
       "type": "action",
       "label": "Check PDF Type",
       "executor": "e2b",
-      "code": "import pymupdf\nimport io\nimport base64\nimport json\n\ntry:\n    # Decode PDF from base64\n    pdf_data_base64 = context['pdf_data']\n    pdf_bytes = base64.b64decode(pdf_data_base64)\n    \n    # Open PDF\n    pdf_stream = io.BytesIO(pdf_bytes)\n    doc = pymupdf.open(stream=pdf_stream, filetype='pdf')\n    \n    # Extract text from first page\n    first_page_text = doc[0].get_text()\n    text_length = len(first_page_text.strip())\n    \n    doc.close()\n    \n    # Classify PDF based on text amount\n    if text_length > 100:\n        pdf_type = 'digital'\n        recommended_method = 'pymupdf'\n    elif text_length > 0:\n        pdf_type = 'hybrid'\n        recommended_method = 'ocr'\n    else:\n        pdf_type = 'scanned'\n        recommended_method = 'ocr'\n    \n    # Update context\n    context['pdf_type'] = pdf_type\n    context['pdf_text_length'] = text_length\n    context['pdf_has_text_layer'] = text_length > 0\n    context['recommended_extraction_method'] = recommended_method\n    \nexcept Exception as e:\n    context['pdf_type'] = 'unknown'\n    context['recommended_extraction_method'] = 'pymupdf'\n    context['check_pdf_error'] = str(e)",
+      "code": "import fitz  # PyMuPDF\nimport io\nimport base64\nimport json\n\ntry:\n    # Decode PDF from base64\n    pdf_data_base64 = context['pdf_data']\n    pdf_bytes = base64.b64decode(pdf_data_base64)\n    \n    # Open PDF\n    pdf_stream = io.BytesIO(pdf_bytes)\n    doc = fitz.open(stream=pdf_stream, filetype='pdf')\n    \n    # Extract text from first page\n    first_page_text = doc[0].get_text()\n    text_length = len(first_page_text.strip())\n    \n    doc.close()\n    \n    # Classify PDF based on text amount\n    if text_length > 100:\n        pdf_type = 'digital'\n        recommended_method = 'pymupdf'\n    elif text_length > 0:\n        pdf_type = 'hybrid'\n        recommended_method = 'ocr'\n    else:\n        pdf_type = 'scanned'\n        recommended_method = 'ocr'\n    \n    # Update context\n    context['pdf_type'] = pdf_type\n    context['pdf_text_length'] = text_length\n    context['pdf_has_text_layer'] = text_length > 0\n    context['recommended_extraction_method'] = recommended_method\n    \nexcept Exception as e:\n    context['pdf_type'] = 'unknown'\n    context['recommended_extraction_method'] = 'pymupdf'\n    context['check_pdf_error'] = str(e)",
       "timeout": 30
     },
     {
@@ -52,15 +52,15 @@
       "type": "action",
       "label": "Find Total Amount",
       "executor": "cached",
-      "prompt": "Find the total invoice amount from ocr_text. Handle amounts with or without decimals (e.g. 850, 850.50, 1234.56). Set to 0.0 if not found.",
+      "prompt": "Find the total invoice amount from ocr_text using regex patterns. Look for Spanish invoice terms like 'total', 'importe total', 'Total sin IVA', etc. Handle European number format (comma as decimal separator like 279,00). Convert to float and store in total_amount. Set to 0.0 if not found.",
       "timeout": 30
     },
     {
       "id": "amount_decision",
       "type": "decision",
       "label": "Amount > €1000?",
-      "executor": "cached",
-      "prompt": "Set branch_decision to True if total_amount > 1000, False otherwise.",
+      "executor": "static",
+      "code": "context['branch_decision'] = context.get('total_amount', 0) > 1000",
       "timeout": 5
     },
     {
