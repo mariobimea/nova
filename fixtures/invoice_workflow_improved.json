@@ -19,9 +19,9 @@
       "id": "has_pdf_decision",
       "type": "decision",
       "label": "Has PDF?",
-      "executor": "static",
-      "code": "context['branch_decision'] = context.get('has_pdf', False)",
-      "timeout": 5
+      "executor": "cached",
+      "prompt": "Set branch_decision to True if has_pdf is True, False otherwise.",
+      "timeout": 10
     },
     {
       "id": "send_rejection_email",
@@ -59,9 +59,9 @@
       "id": "amount_decision",
       "type": "decision",
       "label": "Amount > €1000?",
-      "executor": "static",
-      "code": "context['branch_decision'] = context.get('total_amount', 0) > 1000",
-      "timeout": 5
+      "executor": "cached",
+      "prompt": "Set branch_decision to True if total_amount > 1000, False otherwise.",
+      "timeout": 10
     },
     {
       "id": "send_high_budget_email",
