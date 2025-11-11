@@ -74,10 +74,11 @@ class ExecutorError(NovaException):
     def __init__(
         self,
         message: str,
+        retry_allowed: bool = True,
         generated_code: str = None,
         error_history: list = None
     ):
-        super().__init__(message, retry_allowed=True)
+        super().__init__(message, retry_allowed=retry_allowed)
         self.generated_code = generated_code
         self.error_history = error_history or []
 
@@ -89,7 +90,7 @@ class E2BSandboxError(ExecutorError):
     """
 
     def __init__(self, message: str, sandbox_id: str = None):
-        super().__init__(message)  # ExecutorError handles retry_allowed internally
+        super().__init__(message, retry_allowed=True)
         self.sandbox_id = sandbox_id
 
 
