@@ -60,8 +60,26 @@ class GraphExecutionError(WorkflowError):
 # ============================================================================
 
 class ExecutorError(NovaException):
-    """Base class for executor-related errors"""
-    pass
+    """
+    Base class for executor-related errors.
+
+    Can include metadata about AI code generation attempts for debugging:
+    - generated_code: Last generated code (if AI executor failed)
+    - error_history: All generation attempts with errors (if AI executor failed)
+
+    This metadata allows full traceability when code generation fails after retries.
+    GraphEngine extracts this metadata and saves it to chain_of_work for debugging.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        generated_code: str = None,
+        error_history: list = None
+    ):
+        super().__init__(message, retry_allowed=True)
+        self.generated_code = generated_code
+        self.error_history = error_history or []
 
 
 class E2BSandboxError(ExecutorError):

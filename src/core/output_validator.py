@@ -80,14 +80,23 @@ def auto_validate_output(
     context_after_clean = {k: v for k, v in context_after.items() if not k.startswith('_')}
 
     # ========================================
-    # CHECK 1: Were any new fields added?
+    # CHECK 1: Were any fields added OR modified?
     # ========================================
-    new_fields = set(context_after_clean.keys()) - set(context_before_clean.keys())
+    # Detect fields that are NEW or UPDATED (changed value)
+    new_or_updated_fields = set()
 
-    if len(new_fields) == 0:
-        # NO new fields added!
+    for key in context_after_clean:
+        # Field is new (didn't exist before)
+        if key not in context_before_clean:
+            new_or_updated_fields.add(key)
+        # Field was modified (different value)
+        elif context_after_clean[key] != context_before_clean.get(key):
+            new_or_updated_fields.add(key)
+
+    if len(new_or_updated_fields) == 0:
+        # NO fields added or modified!
         logger.warning(
-            f"⚠️  Validation suspicion: Code executed but added NO new fields to context. "
+            f"⚠️  Validation suspicion: Code executed but did NOT modify context. "
             f"Before: {list(context_before_clean.keys())}, "
             f"After: {list(context_after_clean.keys())}"
         )
@@ -95,78 +104,75 @@ def auto_validate_output(
         return ValidationResult(
             valid=False,
             error_message=(
-                "Code executed but did NOT add any new fields to context.\n\n"
-                "The code must update the context with the results of its work.\n"
-                "Make sure you're adding the extracted/generated data to context_updates.\n\n"
+                "Code executed but did NOT modify context.\n\n"
+                "The code must either:\n"
+                "  - Add new fields to context\n"
+                "  - Update existing fields with new values\n\n"
                 "Example FIX:\n"
                 "  ❌ ocr_text = '...extracted text...'  # Variable never added to context\n"
-                "  ✅ context_updates = {'ocr_text': ocr_text}  # Properly added to output"
+                "  ✅ context_updates = {'ocr_text': ocr_text}  # Properly added to output\n"
+                "  ✅ context_updates = {'has_pdf': True}  # Update existing field"
             ),
             suspicion_score=10,
             details={
-                "new_fields": list(new_fields),
+                "new_or_updated_fields": list(new_or_updated_fields),
                 "context_before_keys": list(context_before_clean.keys()),
                 "context_after_keys": list(context_after_clean.keys())
             }
         )
 
-    logger.debug(f"✅ Check 1 passed: {len(new_fields)} new field(s) added: {list(new_fields)}")
+    logger.debug(f"✅ Check 1 passed: {len(new_or_updated_fields)} field(s) added/updated: {list(new_or_updated_fields)}")
 
     # ========================================
-    # CHECK 2: Are new fields empty or too short?
+    # CHECK 2: Are new/updated fields CRITICALLY empty?
     # ========================================
-    empty_or_short_fields = []
+    # Only flag as "critical" if value is None or empty string
+    # ✅ Allow: bool (even False), numbers (even 0), empty lists/dicts
+    critical_empty_fields = []
 
-    for field in new_fields:
+    for field in new_or_updated_fields:
         value = context_after_clean[field]
 
-        # Check if value is empty or suspiciously short
+        # Only consider "critical" in these cases:
         if value is None:
-            empty_or_short_fields.append(f"{field} (None)")
+            critical_empty_fields.append(f"{field} (None)")
             suspicion_score += 2
+        elif isinstance(value, str) and len(value) == 0:
+            critical_empty_fields.append(f"{field} (empty string)")
+            suspicion_score += 3
+        # ✅ DO NOT penalize:
+        # - bool (True/False are both valid)
+        # - int/float (including 0, 0.0)
+        # - empty list [] or dict {} (valid structures)
 
-        elif isinstance(value, str):
-            if len(value) == 0:
-                empty_or_short_fields.append(f"{field} (empty string)")
-                suspicion_score += 3
-            elif len(value) < 3:
-                empty_or_short_fields.append(f"{field} (too short: '{value}')")
-                suspicion_score += 1
-
-        elif isinstance(value, (list, dict)):
-            if len(value) == 0:
-                empty_or_short_fields.append(f"{field} (empty {type(value).__name__})")
-                suspicion_score += 2
-
-    if empty_or_short_fields:
+    if critical_empty_fields:
         logger.warning(
-            f"⚠️  Validation suspicion: New fields are empty or too short: {empty_or_short_fields}"
+            f"⚠️  Validation suspicion: Some fields are None or empty strings: {critical_empty_fields}"
         )
 
-        # If ALL new fields are empty → hard fail
-        if len(empty_or_short_fields) == len(new_fields):
+        # Only fail if ALL fields are critically empty (None or "")
+        if len(critical_empty_fields) == len(new_or_updated_fields):
             return ValidationResult(
                 valid=False,
                 error_message=(
-                    f"Code executed but produced EMPTY output.\n\n"
-                    f"New fields added: {', '.join(new_fields)}\n"
-                    f"But ALL of them are empty or None!\n\n"
-                    f"Make sure the code actually extracted/generated data and didn't fail silently.\n"
-                    f"Check if there were any errors during execution that were caught but not reported."
+                    f"Code executed but produced ONLY None or empty string values.\n\n"
+                    f"Fields: {', '.join(critical_empty_fields)}\n\n"
+                    f"Make sure the code actually extracted/generated meaningful data.\n"
+                    f"If the code had errors, they should be raised, not silently caught."
                 ),
                 suspicion_score=suspicion_score,
                 details={
-                    "empty_fields": empty_or_short_fields,
-                    "new_fields": list(new_fields)
+                    "critical_empty_fields": critical_empty_fields,
+                    "new_or_updated_fields": list(new_or_updated_fields)
                 }
             )
         else:
-            # Some fields empty, some not → warning
+            # Some fields empty, some not → warning only
             warnings.append(
-                f"Some new fields are empty: {', '.join(empty_or_short_fields)}"
+                f"Some fields are None or empty strings: {', '.join(critical_empty_fields)}"
             )
 
-    logger.debug(f"✅ Check 2 passed: New fields have content (suspicion score: {suspicion_score})")
+    logger.debug(f"✅ Check 2 passed: Fields have valid content (suspicion score: {suspicion_score})")
 
     # ========================================
     # CHECK 3: Specific field expectations based on task
@@ -175,12 +181,12 @@ def auto_validate_output(
 
     # If task mentions "ocr" or "extract text", expect "ocr_text" or similar
     if 'ocr' in task_lower or 'extract text' in task_lower:
-        text_fields = [f for f in new_fields if 'text' in f.lower() or 'ocr' in f.lower()]
+        text_fields = [f for f in new_or_updated_fields if 'text' in f.lower() or 'ocr' in f.lower()]
 
         if not text_fields:
             warnings.append(
                 f"Task mentions OCR/text extraction but no text field found in output. "
-                f"New fields: {list(new_fields)}"
+                f"Modified fields: {list(new_or_updated_fields)}"
             )
             suspicion_score += 3
         else:
@@ -196,14 +202,14 @@ def auto_validate_output(
     # If task mentions "amount" or "total", expect numeric field
     if any(keyword in task_lower for keyword in ['amount', 'total', 'price', 'cost']):
         numeric_fields = [
-            f for f in new_fields
+            f for f in new_or_updated_fields
             if 'amount' in f.lower() or 'total' in f.lower() or 'price' in f.lower()
         ]
 
         if not numeric_fields:
             warnings.append(
                 f"Task mentions amount/total but no amount field found. "
-                f"New fields: {list(new_fields)}"
+                f"Modified fields: {list(new_or_updated_fields)}"
             )
             suspicion_score += 2
 
@@ -220,7 +226,7 @@ def auto_validate_output(
 
     # Passed all checks!
     logger.info(
-        f"✅ Output validation PASSED. New fields: {list(new_fields)}, "
+        f"✅ Output validation PASSED. Modified fields: {list(new_or_updated_fields)}, "
         f"Suspicion score: {suspicion_score}/10"
     )
 
@@ -229,7 +235,7 @@ def auto_validate_output(
         warnings=warnings,
         suspicion_score=suspicion_score,
         details={
-            "new_fields": list(new_fields),
-            "checks_passed": ["fields_added", "fields_not_empty", "field_names_match_task"]
+            "new_or_updated_fields": list(new_or_updated_fields),
+            "checks_passed": ["fields_modified", "fields_not_critically_empty", "field_names_match_task"]
         }
     )

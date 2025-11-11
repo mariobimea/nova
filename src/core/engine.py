@@ -530,6 +530,42 @@ class GraphEngine:
             except GraphExecutionError as e:
                 logger.error(f"Workflow execution failed at node {current_node_id}: {e}")
 
+                # ✅ Extract generated code and metadata from ExecutorError if available
+                code_to_save = None
+                ai_metadata_to_save = None
+
+                # The original ExecutorError is in e.__cause__
+                original_error = e.__cause__
+
+                if isinstance(original_error, ExecutorError):
+                    # Extract generated code from the last attempt
+                    if hasattr(original_error, 'generated_code') and original_error.generated_code:
+                        code_to_save = original_error.generated_code
+                        logger.info(
+                            f"📝 Extracted generated code from failed execution "
+                            f"({len(code_to_save)} chars)"
+                        )
+
+                    # Extract full history of ALL generation attempts
+                    if hasattr(original_error, 'error_history') and original_error.error_history:
+                        ai_metadata_to_save = {
+                            "model": "gpt-4o-mini",
+                            "attempts": len(original_error.error_history),
+                            "all_attempts": original_error.error_history,
+                            "final_error": str(e),
+                            "status": "failed_after_retries"
+                        }
+                        logger.info(
+                            f"📝 Extracted {len(original_error.error_history)} generation attempts "
+                            f"from error metadata"
+                        )
+
+                # Fallback: If no generated code, use prompt or code from node definition
+                if not code_to_save:
+                    code_to_save = getattr(current_node, 'prompt', None) or getattr(current_node, 'code', None)
+                    if code_to_save:
+                        logger.info(f"Using node's original prompt/code as fallback")
+
                 # Create metadata for the failed node
                 failed_metadata = {
                     "node_id": current_node_id,
@@ -539,7 +575,8 @@ class GraphEngine:
                     "input_context": context.snapshot(),
                     "output_result": context.snapshot(),
                     "execution_time": 0,
-                    "code_executed": getattr(current_node, 'code', None),
+                    "code_executed": code_to_save,        # ✅ Generated code or prompt
+                    "ai_metadata": ai_metadata_to_save,   # ✅ All attempts with errors
                     "decision_result": None,
                     "path_taken": None
                 }
@@ -560,7 +597,7 @@ class GraphEngine:
                         error_message=failed_metadata.get('error_message'),
                         decision_result=failed_metadata.get('decision_result'),
                         path_taken=failed_metadata.get('path_taken'),
-                        ai_metadata=failed_metadata.get('ai_metadata'),  # NEW: AI generation metadata (usually None for failed nodes)
+                        ai_metadata=failed_metadata.get('ai_metadata'),  # ✅ Includes all generation attempts if AI executor
                         timestamp=datetime.utcnow()
                     )
                     self.db_session.add(chain_entry)

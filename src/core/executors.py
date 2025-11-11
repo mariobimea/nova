@@ -522,15 +522,22 @@ class CachedExecutor(ExecutorStrategy):
                     "code": generated_code if generated_code else ""
                 })
 
-                # If this was the last attempt, raise
+                # If this was the last attempt, raise with full metadata
                 if attempt == 3:
                     logger.error(
                         f"❌ CachedExecutor failed after 3 attempts. "
                         f"Last error: {e.__class__.__name__}: {str(e)[:200]}"
                     )
+                    logger.info(
+                        f"📝 Preserving generated code ({len(generated_code) if generated_code else 0} chars) "
+                        f"and {len(error_history)} attempts for debugging"
+                    )
+
+                    # Include generated code and ALL attempts for full traceability
                     raise ExecutorError(
-                        f"Failed to generate and execute code after 3 attempts. "
-                        f"Last error: {e}"
+                        message=f"Failed to generate and execute code after 3 attempts. Last error: {e}",
+                        generated_code=generated_code,  # Last generated code
+                        error_history=error_history      # All 3 attempts with errors
                     )
 
                 # Otherwise, retry with error feedback
@@ -539,10 +546,19 @@ class CachedExecutor(ExecutorStrategy):
             except Exception as e:
                 # Unexpected error - fail immediately
                 logger.exception(f"Unexpected error in CachedExecutor: {e}")
-                raise ExecutorError(f"CachedExecutor unexpected error: {e}")
+                # Include partial error history if available
+                raise ExecutorError(
+                    message=f"CachedExecutor unexpected error: {e}",
+                    generated_code=generated_code if 'generated_code' in locals() else None,
+                    error_history=error_history if 'error_history' in locals() else []
+                )
 
         # Should never reach here (loop always returns or raises)
-        raise ExecutorError("CachedExecutor failed unexpectedly")
+        raise ExecutorError(
+            message="CachedExecutor failed unexpectedly",
+            generated_code=None,
+            error_history=[]
+        )
 
 
 class AIExecutor(ExecutorStrategy):
