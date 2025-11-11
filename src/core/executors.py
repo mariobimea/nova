@@ -29,6 +29,7 @@ from .exceptions import (
 )
 from .circuit_breaker import e2b_circuit_breaker
 from .context_validator import is_json_serializable, get_context_stats
+from .output_validator import auto_validate_output
 
 logger = logging.getLogger(__name__)
 
@@ -416,7 +417,35 @@ class CachedExecutor(ExecutorStrategy):
                 )
                 execution_time_ms = int((time.time() - execution_start) * 1000)
 
-                # 3.5. Validate that result is JSON-serializable
+                # 3.5. Auto-validate output (ZERO configuration needed!)
+                # Detects false positives: code executed but didn't do anything useful
+                validation_result = auto_validate_output(
+                    task=prompt_task,
+                    context_before=context,
+                    context_after=result,
+                    generated_code=generated_code
+                )
+
+                if not validation_result.valid:
+                    # Output validation failed - code didn't do its job!
+                    logger.warning(
+                        f"❌ Output validation failed on attempt {attempt}/3: "
+                        f"{validation_result.error_message}"
+                    )
+
+                    # Raise as CodeExecutionError to trigger retry with feedback
+                    raise CodeExecutionError(
+                        message=validation_result.error_message,
+                        code=generated_code,
+                        error_details=f"Suspicion score: {validation_result.suspicion_score}/10"
+                    )
+
+                # Log warnings if any (non-critical issues)
+                if validation_result.warnings:
+                    for warning in validation_result.warnings:
+                        logger.warning(f"⚠️  Output validation warning: {warning}")
+
+                # 3.6. Validate that result is JSON-serializable
                 # This prevents storing complex objects (email.Message, file handles, etc.)
                 # If validation fails, we'll retry with error feedback to the AI
                 is_serializable, serialization_error = is_json_serializable(result)

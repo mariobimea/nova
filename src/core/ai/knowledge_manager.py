@@ -82,6 +82,10 @@ class KnowledgeManager:
         - If context has both 'pdf_data' and mentions method in task → load specific doc
         - Otherwise → use standard keyword detection
 
+        DEPENDENCY SYSTEM:
+        - Some integrations require others to work (e.g., OCR needs PDF for conversion)
+        - Dependencies are automatically loaded when parent integration is detected
+
         Args:
             task: Task description/prompt from user
             context: Context dictionary available to the code
@@ -139,7 +143,22 @@ class KnowledgeManager:
             detected.add('ocr')
             detected.discard('pdf')  # Remove PDF to save tokens
 
-        return sorted(list(detected))  # Sort for consistency
+        # DEPENDENCY SYSTEM: Automatically load required integrations
+        # Define which integrations depend on others
+        integration_dependencies = {
+            'ocr': ['pdf'],  # OCR needs PDF for converting PDF pages to images
+            # Future examples:
+            # 'smtp': ['regex'],  # SMTP might need regex for email templates
+        }
+
+        # Add dependencies for all detected integrations
+        detected_with_deps = detected.copy()
+        for integration in detected:
+            if integration in integration_dependencies:
+                for dependency in integration_dependencies[integration]:
+                    detected_with_deps.add(dependency)
+
+        return sorted(list(detected_with_deps))  # Sort for consistency
 
     def summarize_context(self, context: Dict) -> str:
         """
@@ -263,24 +282,79 @@ class KnowledgeManager:
                     # Skip if integration doc doesn't exist
                     sections.append(f"(Integration doc for '{integration}' not found)\n\n")
 
-        # 5. DISABLED: Error history (Mario wants to simplify prompt)
-        # if error_history and len(error_history) > 0:
-        #     sections.append("## PREVIOUS ATTEMPTS (FAILED)\n\n")
-        #     sections.append("The following attempts to generate code have failed. "
-        #                   "Please learn from these errors and fix the issues.\n\n")
-        #
-        #     for attempt in error_history:
-        #         attempt_num = attempt.get('attempt', '?')
-        #         error_msg = attempt.get('error', 'Unknown error')
-        #         code = attempt.get('code', '')
-        #
-        #         sections.append(f"**Attempt {attempt_num}:**\n\n")
-        #         sections.append(f"Error: `{error_msg}`\n\n")
-        #
-        #         if code:
-        #             sections.append("Generated code:\n```python\n")
-        #             sections.append(code)
-        #             sections.append("\n```\n\n")
+        # 5. Error history - Show ALL previous failed attempts
+        if error_history and len(error_history) > 0:
+            sections.append("## PREVIOUS ATTEMPTS (FAILED)\n\n")
+            sections.append(
+                "⚠️  You have already tried to generate code for this task, but it FAILED.\n"
+                "Learn from these errors and fix the issues.\n\n"
+            )
+
+            for attempt in error_history:
+                attempt_num = attempt.get('attempt', '?')
+                error_msg = attempt.get('error', 'Unknown error')
+                code = attempt.get('code', '')
+
+                sections.append(f"### Attempt {attempt_num}/{len(error_history) + 1} - FAILED\n\n")
+
+                # Error message
+                sections.append(f"**Error:**\n```\n{error_msg}\n```\n\n")
+
+                # Generated code (if available)
+                if code:
+                    # Truncate code if too long (save tokens)
+                    max_code_lines = 50
+                    code_lines = code.split('\n')
+
+                    if len(code_lines) > max_code_lines:
+                        truncated_code = '\n'.join(code_lines[:max_code_lines])
+                        sections.append(f"**Generated code (first {max_code_lines} lines):**\n```python\n")
+                        sections.append(truncated_code)
+                        sections.append(f"\n... ({len(code_lines) - max_code_lines} more lines)\n```\n\n")
+                    else:
+                        sections.append("**Generated code:**\n```python\n")
+                        sections.append(code)
+                        sections.append("\n```\n\n")
+
+                # Add specific hints based on error type
+                error_lower = error_msg.lower()
+
+                if "not valid json" in error_lower or "expecting value" in error_lower:
+                    sections.append(
+                        "💡 **Hint:** The code didn't print valid JSON. Make sure:\n"
+                        "- You print exactly ONE json.dumps() statement at the end\n"
+                        "- The JSON is properly formatted\n"
+                        "- No extra print statements or text before/after the JSON\n\n"
+                    )
+
+                elif "ocr" in error_lower or "easyocr" in error_lower:
+                    sections.append(
+                        "💡 **Hint:** EasyOCR issue detected. Remember:\n"
+                        "- EasyOCR CANNOT read PDF bytes directly\n"
+                        "- You must convert PDF to image first using PyMuPDF (fitz)\n"
+                        "- Example: `pix = page.get_pixmap(); img_bytes = pix.tobytes('png')`\n\n"
+                    )
+
+                elif "timeout" in error_lower:
+                    sections.append(
+                        "💡 **Hint:** Code timed out. Make sure:\n"
+                        "- The code doesn't have infinite loops\n"
+                        "- Heavy operations are optimized\n"
+                        "- You're not loading huge files unnecessarily\n\n"
+                    )
+
+                sections.append("---\n\n")
+
+            # Final instruction after showing all errors
+            sections.append(
+                "## YOUR TASK NOW\n\n"
+                "Fix the errors shown above and generate WORKING code.\n\n"
+                "Common mistakes to avoid:\n"
+                "❌ EasyOCR cannot read PDF bytes - convert to image first\n"
+                "❌ Printing multiple JSON outputs - only ONE print(json.dumps(...)) at the end\n"
+                "❌ Not handling errors - always use try/except\n"
+                "❌ Forgetting to add extracted data to context_updates\n\n"
+            )
 
         # 6. Final instruction
         sections.append("\n---\n\n")
