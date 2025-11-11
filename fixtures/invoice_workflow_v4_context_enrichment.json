@@ -1,0 +1,89 @@
+{
+  "name": "Invoice Processing V4 - Context Enrichment Pattern",
+  "description": "Workflow mejorado usando Context Enrichment en vez de branching. Check PDF type, enriquece contexto, y la IA decide qué método usar.",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start"
+    },
+    {
+      "id": "read_email_and_pdf",
+      "type": "action",
+      "executor": "cached",
+      "code": "Read unread emails from IMAP, filter by whitelist sender, and extract PDF attachment if present. Return: has_emails, email_from, email_subject, has_pdf, pdf_data (base64), pdf_filename",
+      "timeout": 30
+    },
+    {
+      "id": "has_pdf_decision",
+      "type": "decision",
+      "code": "has_pdf = context.get('has_pdf', False)\ncontext['branch_decision'] = has_pdf",
+      "timeout": 5
+    },
+    {
+      "id": "send_rejection",
+      "type": "action",
+      "executor": "cached",
+      "code": "Send rejection email to sender indicating no PDF attachment was found or sender not in whitelist",
+      "timeout": 20
+    },
+    {
+      "id": "check_pdf_type",
+      "type": "action",
+      "executor": "cached",
+      "code": "Analyze PDF to determine its type.\n\nSteps:\n1. Decode pdf_data from base64\n2. Open PDF with PyMuPDF\n3. Extract text from first page\n4. Count characters in extracted text\n5. Classify PDF based on text amount:\n   - If text length > 100 chars → 'digital' (has text layer, use PyMuPDF)\n   - If text length 1-100 chars → 'hybrid' (partial text, use OCR for safety)\n   - If text length = 0 → 'scanned' (pure image, use OCR)\n\nReturn in context:\n- pdf_type: 'digital', 'hybrid', or 'scanned'\n- pdf_text_length: number of characters found in first page\n- pdf_has_text_layer: True if any text found, False otherwise\n- recommended_extraction_method: 'pymupdf' or 'ocr'",
+      "timeout": 30
+    },
+    {
+      "id": "extract_text",
+      "type": "action",
+      "executor": "cached",
+      "code": "Extract text from PDF invoice.\n\nCheck the 'recommended_extraction_method' in context:\n\n**If 'pymupdf'**:\n  1. Decode pdf_data from base64\n  2. Open PDF with PyMuPDF\n  3. Extract text from all pages\n  4. Clean control characters\n  5. Return pdf_text\n\n**If 'ocr'**:\n  1. Decode pdf_data from base64\n  2. Convert PDF pages to images using pdf2image (dpi=200)\n  3. Initialize EasyOCR reader with Spanish and English (gpu=False)\n  4. Extract text from each page image\n  5. Combine all pages into single text\n  6. Clean control characters\n  7. Return pdf_text\n\nReturn in context:\n- pdf_text: The extracted text from all pages\n- extraction_method_used: 'PyMuPDF' or 'EasyOCR' (which method was actually used)\n- pdf_page_count: Number of pages processed",
+      "timeout": 90
+    },
+    {
+      "id": "extract_amount",
+      "type": "action",
+      "executor": "cached",
+      "code": "Extract total amount from invoice text (pdf_text) using regex patterns. Search for patterns like 'total: €123.45', 'importe: 123,45 EUR', etc. Return total_amount as float.",
+      "timeout": 10
+    },
+    {
+      "id": "amount_decision",
+      "type": "decision",
+      "code": "amount = context.get('total_amount', 0)\ncontext['branch_decision'] = amount > 1000",
+      "timeout": 5
+    },
+    {
+      "id": "send_high_budget_notification",
+      "type": "action",
+      "executor": "cached",
+      "code": "Send email notification to sender indicating invoice amount exceeds automatic approval limit (€1000) and requires manual review",
+      "timeout": 20
+    },
+    {
+      "id": "save_to_database",
+      "type": "action",
+      "executor": "cached",
+      "code": "Save invoice to PostgreSQL database. Insert into invoices table: email_from, email_subject, pdf_filename, pdf_content (binary), pdf_size_bytes, pdf_text, extraction_method_used, total_amount, currency. Return invoice_id",
+      "timeout": 60
+    },
+    {
+      "id": "end",
+      "type": "end"
+    }
+  ],
+  "edges": [
+    {"from": "start", "to": "read_email_and_pdf"},
+    {"from": "read_email_and_pdf", "to": "has_pdf_decision"},
+    {"from": "has_pdf_decision", "to": "send_rejection", "condition": "false"},
+    {"from": "has_pdf_decision", "to": "check_pdf_type", "condition": "true"},
+    {"from": "send_rejection", "to": "end"},
+    {"from": "check_pdf_type", "to": "extract_text"},
+    {"from": "extract_text", "to": "extract_amount"},
+    {"from": "extract_amount", "to": "amount_decision"},
+    {"from": "amount_decision", "to": "send_high_budget_notification", "condition": "true"},
+    {"from": "amount_decision", "to": "save_to_database", "condition": "false"},
+    {"from": "send_high_budget_notification", "to": "end"},
+    {"from": "save_to_database", "to": "end"}
+  ]
+}

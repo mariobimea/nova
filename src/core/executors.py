@@ -869,19 +869,28 @@ print(json.dumps(context, ensure_ascii=True))
                 # If it does, extract context_updates. Otherwise, use the whole JSON as context.
                 if isinstance(output_json, dict) and "context_updates" in output_json:
                     # AI-generated code format: {status, context_updates, message}
-                    updated_context = output_json.get("context_updates", {})
-
-                    # Log status and message if present
                     status = output_json.get("status")
                     message = output_json.get("message")
+
+                    # If status is "error", treat it as a code execution error
+                    # This allows the AI to communicate errors gracefully (e.g., "no emails found")
+                    # and triggers retry with error feedback
+                    if status == "error":
+                        logger.warning(f"Code reported error status: {message}")
+                        raise CodeExecutionError(
+                            message=f"Code execution error: {message}",
+                            code=full_code,
+                            error_details=message
+                        )
+
+                    # Extract context updates for successful execution
+                    updated_context = output_json.get("context_updates", {})
+
+                    # Log successful execution
                     if status:
                         logger.debug(f"Execution status: {status}")
                     if message:
                         logger.debug(f"Execution message: {message}")
-
-                    # If status is "error", log it but still return context_updates
-                    if status == "error":
-                        logger.warning(f"Code reported error status: {message}")
                 else:
                     # Legacy format or direct context update
                     updated_context = output_json

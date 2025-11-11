@@ -400,7 +400,7 @@ class GraphEngine:
             metadata["status"] = "failed"
             metadata["error_message"] = str(e)
             logger.error(f"Node {node.id} execution failed: {e}")
-            raise GraphExecutionError(f"Node {node.id} failed: {e}")
+            raise GraphExecutionError(f"Node {node.id} failed: {e}") from e
 
         except Exception as e:
             # Unexpected error
