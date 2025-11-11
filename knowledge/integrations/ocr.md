@@ -141,7 +141,7 @@ You MUST decode it to bytes, then convert PDF pages to images using PyMuPDF.
 
 ```python
 import easyocr
-import pymupdf  # PyMuPDF (also known as 'fitz')
+import fitz  # PyMuPDF
 import base64
 import io
 import json
@@ -160,7 +160,7 @@ try:
 
     # Open PDF from bytes
     pdf_stream = io.BytesIO(pdf_data)
-    doc = pymupdf.open(stream=pdf_stream, filetype='pdf')
+    doc = fitz.open(stream=pdf_stream, filetype='pdf')
 
     # Initialize EasyOCR reader (CPU-only)
     reader = easyocr.Reader(['es', 'en'], gpu=False)

@@ -22,9 +22,9 @@ Extract text and data from PDF files using PyMuPDF (fitz) in NOVA workflows.
 
 **How to check if PDF has text layer:**
 ```python
-import pymupdf
+import fitz  # PyMuPDF
 
-doc = pymupdf.open("document.pdf")
+doc = fitz.open("document.pdf")
 text = doc[0].get_text()  # Get text from first page
 
 if text.strip():
@@ -41,18 +41,20 @@ doc.close()
 
 ## Basic Usage: Open PDF and Extract Text
 
-Import the library as `pymupdf` (or `fitz` for backward compatibility):
+Import the library as `fitz` (PyMuPDF 1.24.0 installed in E2B sandbox):
 
 ```python
-import pymupdf  # or: import fitz
+import fitz  # PyMuPDF library
 
-doc = pymupdf.open("example.pdf")  # open a document
+doc = fitz.open("example.pdf")  # open a document
 for page in doc:  # iterate the document pages
     text = page.get_text()  # get plain text encoded as UTF-8
     print(text)
 
 doc.close()  # always close when done
 ```
+
+**IMPORTANT**: The E2B sandbox has PyMuPDF 1.24.0, which MUST be imported as `fitz`, not `pymupdf`.
 
 ---
 
@@ -61,7 +63,7 @@ doc.close()  # always close when done
 **IMPORTANT**: In NOVA workflows, `pdf_data` is stored as a **base64-encoded string**. You MUST decode it first.
 
 ```python
-import pymupdf
+import fitz  # PyMuPDF
 import io
 import base64
 import json
@@ -74,7 +76,7 @@ pdf_data = base64.b64decode(pdf_data_base64)
 
 # Open PDF from bytes
 pdf_stream = io.BytesIO(pdf_data)
-doc = pymupdf.open(stream=pdf_stream, filetype='pdf')
+doc = fitz.open(stream=pdf_stream, filetype='pdf')
 
 print(json.dumps({
     "status": "success",
@@ -90,12 +92,12 @@ doc.close()
 **Alternative approach** (open from bytes directly):
 
 ```python
-import pymupdf
+import fitz  # PyMuPDF
 
 # Open from byte stream (e.g., read from a file in binary mode)
 with open("example.pdf", "rb") as file:
     file_content = file.read()
-    doc = pymupdf.open(stream=file_content, filetype="pdf")
+    doc = fitz.open(stream=file_content, filetype="pdf")
 
 doc.close()
 ```
@@ -105,7 +107,7 @@ doc.close()
 ## Extract Text from All Pages
 
 ```python
-import pymupdf
+import fitz  # PyMuPDF
 import io
 import json
 import base64
@@ -117,7 +119,7 @@ try:
 
     # Open PDF
     pdf_stream = io.BytesIO(pdf_data)
-    doc = pymupdf.open(stream=pdf_stream, filetype='pdf')
+    doc = fitz.open(stream=pdf_stream, filetype='pdf')
 
     # Extract text from all pages
     full_text = ''
@@ -148,9 +150,9 @@ except Exception as e:
 PyMuPDF supports multiple output formats:
 
 ```python
-import pymupdf
+import fitz  # PyMuPDF
 
-doc = pymupdf.open("document.pdf")
+doc = fitz.open("document.pdf")
 page = doc[0]
 
 # Plain text extraction
@@ -168,7 +170,7 @@ for block in text_dict["blocks"]:
                 print(f"Text: {span['text']}, Font: {span['font']}, Size: {span['size']}")
 
 # Extract with flags for better control
-text_preserved = page.get_text("text", flags=pymupdf.TEXT_PRESERVE_WHITESPACE)
+text_preserved = page.get_text("text", flags=fitz.TEXT_PRESERVE_WHITESPACE)
 
 doc.close()
 ```
@@ -178,9 +180,9 @@ doc.close()
 ## Search Text in PDF
 
 ```python
-import pymupdf
+import fitz  # PyMuPDF
 
-doc = pymupdf.open("document.pdf")
+doc = fitz.open("document.pdf")
 page = doc[0]
 
 search_term = "Total"
@@ -199,13 +201,13 @@ doc.close()
 ## Extract Text from Specific Rectangle
 
 ```python
-import pymupdf
+import fitz  # PyMuPDF
 
-doc = pymupdf.open("document.pdf")
+doc = fitz.open("document.pdf")
 page = doc[0]
 
 # Define rectangle (x0, y0, x1, y1)
-rect = pymupdf.Rect(0, 0, 200, 100)
+rect = fitz.Rect(0, 0, 200, 100)
 
 # Extract text only from this area
 text_in_box = page.get_textbox(rect)
@@ -221,7 +223,7 @@ doc.close()
 Extract text → Search for invoice amount → Return structured data
 
 ```python
-import pymupdf
+import fitz  # PyMuPDF
 import io
 import re
 import json
@@ -237,7 +239,7 @@ try:
 
     # Open PDF
     pdf_stream = io.BytesIO(pdf_data)
-    doc = pymupdf.open(stream=pdf_stream, filetype='pdf')
+    doc = fitz.open(stream=pdf_stream, filetype='pdf')
 
     # Extract text from all pages
     full_text = ''
@@ -286,9 +288,9 @@ except Exception as e:
 ## Extract Images from PDF
 
 ```python
-import pymupdf
+import fitz  # PyMuPDF
 
-doc = pymupdf.open("document.pdf")
+doc = fitz.open("document.pdf")
 
 # Extract all images from document
 for page_num in range(doc.page_count):
