@@ -89,7 +89,7 @@ class E2BSandboxError(ExecutorError):
     """
 
     def __init__(self, message: str, sandbox_id: str = None):
-        super().__init__(message, retry_allowed=True)
+        super().__init__(message)  # ExecutorError handles retry_allowed internally
         self.sandbox_id = sandbox_id
 
 
