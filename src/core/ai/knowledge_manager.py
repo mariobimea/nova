@@ -167,6 +167,11 @@ class KnowledgeManager:
         Shows types and simplified representations without hiding secrets
         (because secrets should not be in context in the first place).
 
+        SMART TRUNCATION:
+        - Heavy fields (pdf_data, image_data, etc.) are truncated to save tokens
+        - Important text fields (ocr_text, email_body, etc.) are shown in full
+        - Credentials and config are shown directly (they should be in env vars anyway)
+
         Args:
             context: Context dictionary
 
@@ -177,6 +182,14 @@ class KnowledgeManager:
             return "CONTEXT AVAILABLE:\n- (empty)"
 
         lines = ["CONTEXT AVAILABLE:"]
+
+        # Define which fields should be truncated (heavy binary/base64 data)
+        truncate_fields = {
+            'pdf_data',      # Base64 PDF (huge)
+            'image_data',    # Base64 images
+            'attachment_data',  # Email attachments
+            'file_data',     # Generic file data
+        }
 
         for key, value in sorted(context.items()):
             # Get type name
@@ -193,10 +206,14 @@ class KnowledgeManager:
                     repr_value = f"<binary data, {size_bytes} bytes>"
 
             elif isinstance(value, str):
-                # String - truncate if too long
-                if len(value) > 50:
-                    repr_value = f'"{value[:50]}..."'
+                # String handling with SMART truncation
+                should_truncate = key in truncate_fields
+
+                if should_truncate and len(value) > 100:
+                    # Heavy field (like base64) - truncate aggressively
+                    repr_value = f'"{value[:100]}..." (truncated, {len(value)} chars total)'
                 else:
+                    # Important text field - show in full (ocr_text, email_body, etc.)
                     repr_value = f'"{value}"'
 
             elif isinstance(value, (int, float, bool)):
