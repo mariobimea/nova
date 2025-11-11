@@ -406,7 +406,7 @@ class CachedExecutor(ExecutorStrategy):
                 generation_time_ms = int((time.time() - generation_start) * 1000)
 
                 logger.info(f"Code generated successfully in {generation_time_ms}ms")
-                logger.debug(f"Generated code:\n{generated_code}")
+                logger.info(f"Generated code ({len(generated_code)} chars):\n{generated_code}")  # Changed to INFO to always see it
 
                 # 3. Execute code with E2B
                 execution_start = time.time()
