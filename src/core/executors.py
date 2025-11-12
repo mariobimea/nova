@@ -303,10 +303,14 @@ class CachedExecutor(ExecutorStrategy):
                         "- search_documentation(query, source?, top_k?): Search integration docs for code examples\n\n"
                         "WORKFLOW:\n"
                         "1. Analyze the task and context\n"
-                        "2. Use search_documentation() to find relevant API docs and examples\n"
-                        "   - You can call it multiple times with different queries\n"
-                        "   - Search for specific patterns, not general topics\n"
-                        "3. Once you have enough information, generate Python 3.11 code\n\n"
+                        "2. IF you need docs: Use search_documentation() to find relevant API docs\n"
+                        "   - Search for specific patterns (e.g., 'send email SMTP', 'open PDF bytes')\n"
+                        "   - You can search 2-3 times max if needed\n"
+                        "3. Once you have enough info (or if docs aren't needed), generate Python code immediately\n\n"
+                        "IMPORTANT:\n"
+                        "- Don't search excessively - 1-3 searches should be enough\n"
+                        "- If you can solve the task without docs, do it directly\n"
+                        "- Generate code as soon as you have sufficient information\n\n"
                         "CODE REQUIREMENTS:\n"
                         "- Use only pre-installed libraries (see environment specs below)\n"
                         "- Code MUST end with EXACTLY ONE print(json.dumps({...})) statement\n"
@@ -316,6 +320,7 @@ class CachedExecutor(ExecutorStrategy):
                         "ENVIRONMENT:\n"
                         "- Python 3.11 in E2B sandbox\n"
                         "- Pre-installed: pymupdf (import as 'fitz'), easyocr, requests, pandas, psycopg2\n"
+                        "- SMTP/IMAP: Use smtplib/imaplib from standard library\n"
                         "- Context dict is injected automatically (access with context['key'])\n"
                         "- Network access available\n"
                     )
@@ -336,11 +341,11 @@ class CachedExecutor(ExecutorStrategy):
 
             # Tool calling loop
             tools = get_all_tools()
-            max_tool_iterations = 10  # Prevent infinite loops
+            max_tool_iterations = 15  # Prevent infinite loops (increased for complex tasks)
             tool_call_count = 0
 
             for iteration in range(max_tool_iterations):
-                logger.debug(f"Tool calling iteration {iteration + 1}/{max_tool_iterations}")
+                logger.info(f"🔄 Tool calling iteration {iteration + 1}/{max_tool_iterations}")
 
                 # Call OpenAI with tools
                 response = self.openai_client.chat.completions.create(
@@ -354,10 +359,14 @@ class CachedExecutor(ExecutorStrategy):
 
                 message = response.choices[0].message
 
+                # Log what AI is doing
+                if message.content:
+                    logger.info(f"💭 AI thinking: {message.content[:150]}...")
+
                 # Case 1: AI wants to use a tool
                 if message.tool_calls:
                     tool_call_count += len(message.tool_calls)
-                    logger.info(f"AI requested {len(message.tool_calls)} tool call(s)")
+                    logger.info(f"🔧 AI requested {len(message.tool_calls)} tool call(s)")
 
                     # Add assistant message with tool_calls to history
                     messages.append({
