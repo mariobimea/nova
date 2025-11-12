@@ -54,3 +54,6 @@ htmlcov/
 
 # Alembic
 alembic/versions/*.pyc
+
+# Vector Database (ChromaDB)
+knowledge/vector_db/

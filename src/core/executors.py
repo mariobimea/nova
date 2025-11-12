@@ -17,7 +17,7 @@ Executors handle:
 import json
 import os
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
 from .exceptions import (
@@ -90,7 +90,7 @@ class CachedExecutor(ExecutorStrategy):
         # result = {
         #     "total_amount": "$1,234.56",
         #     "_ai_metadata": {
-        #         "model": "gpt-4o-mini",
+        #         "model": "gpt-5-mini",
         #         "generated_code": "import fitz\n...",
         #         "tokens_input": 7000,
         #         "tokens_output": 450,
@@ -99,10 +99,10 @@ class CachedExecutor(ExecutorStrategy):
         #     }
         # }
 
-    Pricing (OpenAI gpt-4o-mini):
-    - Input: $0.15 / 1M tokens (~$0.0015 per 10K tokens)
-    - Output: $0.60 / 1M tokens (~$0.0060 per 10K tokens)
-    - Typical cost per generation: $0.001 - $0.002 (very cheap!)
+    Pricing (OpenAI gpt-5-mini):
+    - Input: $0.25 / 1M tokens (~$0.0025 per 10K tokens)
+    - Output: $2.00 / 1M tokens (~$0.0200 per 10K tokens)
+    - Typical cost per generation: $0.002 - $0.005 (affordable!)
 
     Phase 1 MVP: No cache (generates fresh code every time)
     Phase 2: Hash-based cache + semantic cache with embeddings
@@ -148,7 +148,7 @@ class CachedExecutor(ExecutorStrategy):
         # Initialize Knowledge Manager (for prompt building)
         self.knowledge_manager = KnowledgeManager()
 
-        logger.info("CachedExecutor initialized with OpenAI gpt-4o-mini")
+        logger.info("CachedExecutor initialized with OpenAI gpt-5-mini")
 
     def _clean_code_blocks(self, code: str) -> str:
         """
@@ -224,9 +224,9 @@ class CachedExecutor(ExecutorStrategy):
         Uses simple estimation: ~4 characters = 1 token
         (Actual tokenization is more complex, but this is close enough)
 
-        OpenAI gpt-4o-mini pricing (as of Nov 2024):
-        - Input: $0.15 / 1M tokens
-        - Output: $0.60 / 1M tokens
+        OpenAI gpt-5-mini pricing (as of 2025):
+        - Input: $0.25 / 1M tokens
+        - Output: $2.00 / 1M tokens
 
         Args:
             prompt: Input prompt sent to OpenAI
@@ -239,9 +239,9 @@ class CachedExecutor(ExecutorStrategy):
         input_tokens = len(prompt) // 4
         output_tokens = len(code) // 4
 
-        # gpt-4o-mini pricing (per 1M tokens)
-        input_cost_per_1m = 0.15
-        output_cost_per_1m = 0.60
+        # gpt-5-mini pricing (per 1M tokens)
+        input_cost_per_1m = 0.25
+        output_cost_per_1m = 2.00
 
         # Calculate cost in USD
         input_cost = (input_tokens / 1_000_000) * input_cost_per_1m
@@ -255,80 +255,215 @@ class CachedExecutor(ExecutorStrategy):
             "cost_usd": round(total_cost, 6)  # Round to 6 decimals ($0.000001)
         }
 
-    async def _generate_code(self, prompt: str) -> str:
+    async def _generate_code_with_tools(
+        self,
+        task: str,
+        context: Dict[str, Any],
+        error_history: Optional[List[Dict]] = None
+    ) -> str:
         """
-        Generate Python code using OpenAI API.
+        Generate Python code using OpenAI API with tool calling for dynamic doc search.
+
+        The AI can use search_documentation() tool to find relevant docs iteratively.
+        This replaces the old approach of pre-loading all docs upfront.
+
+        Flow:
+        1. AI receives task + context (NO pre-loaded docs)
+        2. AI decides: "Do I need docs?" → calls search_documentation()
+        3. We execute search → return results to AI
+        4. AI decides: "Need more docs?" → repeat OR "Ready" → generate code
+        5. Return generated code
 
         Args:
-            prompt: Complete prompt with task, context, and integration docs
+            task: Natural language task description
+            context: Workflow context dictionary
+            error_history: Optional list of previous failed attempts with errors
 
         Returns:
             Generated Python code (cleaned and validated)
 
         Raises:
-            ExecutorError: If OpenAI API fails or code generation fails
+            ExecutorError: If generation fails after max tool iterations
         """
         import time
+        import json
+        from .ai.tools import get_all_tools, execute_search_documentation
 
         try:
-            logger.debug("Calling OpenAI API to generate code...")
+            logger.info("Generating code with tool calling (dynamic doc search)...")
             start_time = time.time()
 
-            # Call OpenAI API
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a Python code generator for the NOVA workflow engine. "
-                            "Generate clean, executable Python code based on the documentation and task provided. "
-                            "IMPORTANT: The code MUST end with EXACTLY ONE print() statement that outputs JSON. "
-                            "Do NOT print multiple times. Do NOT print empty JSON at the end. "
-                            "Return ONLY the Python code, no explanations or markdown."
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.2,  # Low temperature for deterministic output
-                max_tokens=2000,  # Enough for most code snippets
+            # Build initial messages (minimal prompt, no pre-loaded docs)
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a Python code generator for the NOVA workflow engine.\n\n"
+                        "TOOLS AVAILABLE:\n"
+                        "- search_documentation(query, source?, top_k?): Search integration docs for code examples\n\n"
+                        "WORKFLOW:\n"
+                        "1. Analyze the task and context\n"
+                        "2. Use search_documentation() to find relevant API docs and examples\n"
+                        "   - You can call it multiple times with different queries\n"
+                        "   - Search for specific patterns, not general topics\n"
+                        "3. Once you have enough information, generate Python 3.11 code\n\n"
+                        "CODE REQUIREMENTS:\n"
+                        "- Use only pre-installed libraries (see environment specs below)\n"
+                        "- Code MUST end with EXACTLY ONE print(json.dumps({...})) statement\n"
+                        "- Output format: {\"status\": \"success\", \"context_updates\": {...}, \"message\": \"...\"}\n"
+                        "- Include proper error handling\n"
+                        "- Return ONLY code, no explanations\n\n"
+                        "ENVIRONMENT:\n"
+                        "- Python 3.11 in E2B sandbox\n"
+                        "- Pre-installed: pymupdf (import as 'fitz'), easyocr, requests, pandas, psycopg2\n"
+                        "- Context dict is injected automatically (access with context['key'])\n"
+                        "- Network access available\n"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"TASK:\n{task}\n\n"
+                        f"CONTEXT AVAILABLE:\n{self.knowledge_manager.summarize_context(context)}\n\n"
+                        + (
+                            f"PREVIOUS FAILED ATTEMPTS:\n{self._format_error_history(error_history)}\n\n"
+                            if error_history else ""
+                        ) +
+                        "Use search_documentation() to find relevant docs, then generate code."
+                    )
+                }
+            ]
+
+            # Tool calling loop
+            tools = get_all_tools()
+            max_tool_iterations = 10  # Prevent infinite loops
+            tool_call_count = 0
+
+            for iteration in range(max_tool_iterations):
+                logger.debug(f"Tool calling iteration {iteration + 1}/{max_tool_iterations}")
+
+                # Call OpenAI with tools
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",  # AI decides if it needs tools
+                    temperature=0.2,
+                    max_tokens=2000
+                )
+
+                message = response.choices[0].message
+
+                # Case 1: AI wants to use a tool
+                if message.tool_calls:
+                    tool_call_count += len(message.tool_calls)
+                    logger.info(f"AI requested {len(message.tool_calls)} tool call(s)")
+
+                    # Add assistant message with tool_calls to history
+                    messages.append({
+                        "role": "assistant",
+                        "content": message.content,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            }
+                            for tc in message.tool_calls
+                        ]
+                    })
+
+                    # Execute each tool call
+                    for tool_call in message.tool_calls:
+                        function_name = tool_call.function.name
+                        arguments = json.loads(tool_call.function.arguments)
+
+                        logger.info(f"Executing tool: {function_name}({arguments})")
+
+                        if function_name == "search_documentation":
+                            # Execute search
+                            result = execute_search_documentation(
+                                vector_store=self.knowledge_manager.vector_store,
+                                query=arguments.get("query"),
+                                source=arguments.get("source"),
+                                top_k=arguments.get("top_k", 3)
+                            )
+
+                            # Add tool response to messages
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": result
+                            })
+
+                        else:
+                            # Unknown tool
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": f"ERROR: Unknown tool '{function_name}'"
+                            })
+
+                    # Continue loop (let AI decide next step)
+                    continue
+
+                # Case 2: AI generated code (no tool calls)
+                else:
+                    raw_code = message.content
+
+                    if not raw_code:
+                        raise ExecutorError("OpenAI returned empty response")
+
+                    generation_time_ms = int((time.time() - start_time) * 1000)
+                    logger.info(
+                        f"Code generated successfully after {tool_call_count} tool call(s) "
+                        f"in {generation_time_ms}ms"
+                    )
+
+                    # Clean and validate code
+                    code = self._clean_code_blocks(raw_code)
+
+                    if not code:
+                        raise ExecutorError("Generated code is empty after cleaning")
+
+                    self._validate_syntax(code)
+
+                    logger.debug(f"Generated code ({len(code)} chars):\n{code}")
+
+                    return code
+
+            # If we reach here, exceeded max iterations
+            raise ExecutorError(
+                f"Exceeded max tool iterations ({max_tool_iterations}) without generating code"
             )
-
-            generation_time_ms = int((time.time() - start_time) * 1000)
-
-            # Extract generated code
-            raw_code = response.choices[0].message.content
-
-            if not raw_code:
-                raise ExecutorError("OpenAI returned empty response")
-
-            logger.debug(f"OpenAI generation completed in {generation_time_ms}ms")
-            logger.debug(f"Raw code length: {len(raw_code)} chars")
-
-            # Clean markdown blocks and explanations
-            code = self._clean_code_blocks(raw_code)
-
-            if not code:
-                raise ExecutorError("Generated code is empty after cleaning")
-
-            logger.debug(f"Cleaned code length: {len(code)} chars")
-
-            # Validate syntax
-            self._validate_syntax(code)
-
-            logger.debug("Code syntax validated successfully")
-
-            return code
 
         except Exception as e:
             if isinstance(e, (ExecutorError, CodeExecutionError)):
                 raise
 
-            logger.exception(f"OpenAI code generation failed: {e}")
-            raise ExecutorError(f"Failed to generate code with OpenAI: {e}")
+            logger.exception(f"OpenAI code generation with tools failed: {e}")
+            raise ExecutorError(f"Failed to generate code with tool calling: {e}")
+
+    def _format_error_history(self, error_history: Optional[List[Dict]]) -> str:
+        """Format error history for tool calling prompt."""
+        if not error_history:
+            return ""
+
+        lines = []
+        for i, attempt in enumerate(error_history, 1):
+            error = attempt.get("error", "Unknown error")
+            code = attempt.get("code", "")
+
+            lines.append(f"Attempt {i}: FAILED")
+            lines.append(f"Error: {error[:300]}")  # Truncate long errors
+            if code:
+                lines.append(f"Code preview: {code[:200]}...")
+            lines.append("")
+
+        return "\n".join(lines)
 
     async def execute(
         self,
@@ -359,7 +494,7 @@ class CachedExecutor(ExecutorStrategy):
             {
                 ...context updates from execution...,
                 "_ai_metadata": {
-                    "model": "gpt-4o-mini",
+                    "model": "gpt-5-mini",
                     "prompt": "Extract total from invoice",
                     "generated_code": "import fitz\n...",
                     "code_length": 450,
@@ -401,20 +536,14 @@ class CachedExecutor(ExecutorStrategy):
                     else:
                         logger.info(f"   {key}: {value}")
 
-                # 1. Build complete prompt with knowledge
-                full_prompt, prompt_metadata = self.knowledge_manager.build_prompt(
+                # 1. Generate code with OpenAI tool calling
+                # AI searches docs dynamically using search_documentation() tool
+                generation_start = time.time()
+                generated_code = await self._generate_code_with_tools(
                     task=prompt_task,
                     context=context,
                     error_history=error_history if error_history else None
                 )
-
-                logger.debug(f"Full prompt length: {len(full_prompt)} chars (~{len(full_prompt)//4} tokens)")
-                logger.debug(f"Integrations detected: {prompt_metadata['integrations_detected']}")
-                logger.debug(f"Docs retrieved: {prompt_metadata['docs_retrieved_count']} via {prompt_metadata['retrieval_method']}")
-
-                # 2. Generate code with OpenAI
-                generation_start = time.time()
-                generated_code = await self._generate_code(full_prompt)
                 generation_time_ms = int((time.time() - generation_start) * 1000)
 
                 logger.info(f"Code generated successfully in {generation_time_ms}ms")
@@ -496,7 +625,14 @@ class CachedExecutor(ExecutorStrategy):
                 # 4. Success! Add AI metadata
                 total_time_ms = int((time.time() - total_start_time) * 1000)
 
-                token_info = self._estimate_tokens(full_prompt, generated_code)
+                # Estimate tokens (rough approximation for tool calling mode)
+                # Actual token usage would need to be extracted from OpenAI response usage field
+                estimated_tokens_input = len(prompt_task) // 4 + len(str(context)) // 4
+                estimated_tokens_output = len(generated_code) // 4
+                estimated_cost = (
+                    (estimated_tokens_input / 1_000_000) * 0.25 +  # Input cost
+                    (estimated_tokens_output / 1_000_000) * 2.00    # Output cost
+                )
 
                 result["_ai_metadata"] = {
                     # Model & generation
@@ -505,30 +641,25 @@ class CachedExecutor(ExecutorStrategy):
                     "generated_code": generated_code,
                     "code_length": len(generated_code),
 
-                    # Costs & timing
-                    "tokens_input": token_info["tokens_input"],
-                    "tokens_output": token_info["tokens_output"],
-                    "tokens_total": token_info["tokens_total"],
-                    "cost_usd": token_info["cost_usd"],
+                    # Costs & timing (estimated for tool calling mode)
+                    "tokens_input_estimated": estimated_tokens_input,
+                    "tokens_output_estimated": estimated_tokens_output,
+                    "cost_usd_estimated": round(estimated_cost, 6),
                     "generation_time_ms": generation_time_ms,
                     "execution_time_ms": execution_time_ms,
                     "total_time_ms": total_time_ms,
                     "attempts": attempt,
                     "cache_hit": False,  # Phase 1 MVP - no cache yet
 
-                    # DEBUG INFO (new) - For troubleshooting AI failures
-                    "full_prompt": full_prompt,  # Complete prompt sent to OpenAI
-                    "full_prompt_length": len(full_prompt),
-                    "context_summary": prompt_metadata["context_summary"],  # Formatted context
-                    "integrations_detected": prompt_metadata["integrations_detected"],  # Auto-detected integrations
-                    "docs_retrieved_count": prompt_metadata["docs_retrieved_count"],  # How many doc chunks
-                    "retrieval_method": prompt_metadata["retrieval_method"],  # "vector_store" or "file_loading"
+                    # Tool calling metadata
+                    "tool_calling_enabled": True,
+                    "retrieval_method": "dynamic_tool_calling",  # AI searches docs on demand
                 }
 
                 logger.info(
                     f"✅ CachedExecutor success on attempt {attempt}/3 "
                     f"(generation: {generation_time_ms}ms, execution: {execution_time_ms}ms, "
-                    f"cost: ${token_info['cost_usd']:.6f})"
+                    f"est_cost: ${estimated_cost:.6f})"
                 )
 
                 return result

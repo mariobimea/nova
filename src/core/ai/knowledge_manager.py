@@ -97,8 +97,8 @@ class KnowledgeManager:
         Uses keyword-based detection from task string and context keys.
 
         SMART DETECTION for PDF extraction:
-        - If context has 'recommended_extraction_method' = 'pymupdf' → load only 'pdf' docs
-        - If context has 'recommended_extraction_method' = 'ocr' → load only 'ocr' docs
+        - If context has 'recommended_extraction_method' = 'pymupdf' → load PyMuPDF docs
+        - If context has 'recommended_extraction_method' = 'ocr' → load EasyOCR docs
         - If context has both 'pdf_data' and mentions method in task → load specific doc
         - Otherwise → use standard keyword detection
 
@@ -121,10 +121,10 @@ class KnowledgeManager:
         integration_keywords = {
             'imap': ['email', 'imap', 'inbox', 'read email', 'unread', 'fetch email'],
             'smtp': ['send email', 'smtp', 'reply', 'notification', 'send mail'],
-            'pdf': ['pdf', 'pymupdf', 'fitz', 'text layer'],
+            'pymupdf': ['pdf', 'pymupdf', 'fitz', 'text layer', 'extract text'],
             'postgres': ['database', 'db', 'save', 'store', 'query', 'insert', 'update', 'postgres', 'sql'],
             'regex': ['pattern', 'regex', 'search text', 'extract amount', 'find', 'match'],
-            'ocr': ['ocr', 'easyocr', 'scan', 'scanned', 'image to text', 'recognize text', 'optical']
+            'easyocr': ['ocr', 'easyocr', 'scan', 'scanned', 'image to text', 'recognize text', 'optical']
         }
 
         for integration, keywords in integration_keywords.items():
@@ -137,10 +137,10 @@ class KnowledgeManager:
         context_key_hints = {
             'imap': ['email_subject', 'email_from', 'email_date', 'has_emails'],
             'smtp': ['smtp_host', 'smtp_port', 'rejection_reason'],
-            'pdf': ['pdf_filename', 'pdf_text'],
+            'pymupdf': ['pdf_filename', 'pdf_text', 'pdf_data'],
             'postgres': ['invoice_id', 'db_table', 'sql_query'],
             'regex': ['pdf_text', 'total_amount', 'amount_found'],
-            'ocr': ['invoice_image_path', 'image_path', 'scanned_pdf']
+            'easyocr': ['invoice_image_path', 'image_path', 'scanned_pdf', 'ocr_text']
         }
 
         for integration, hint_keys in context_key_hints.items():
@@ -155,18 +155,18 @@ class KnowledgeManager:
 
         if recommended_method == 'pymupdf':
             # PDF digital → Use PyMuPDF
-            detected.add('pdf')
+            detected.add('pymupdf')
             # Note: Don't remove OCR - it might still be useful for hybrid PDFs
 
         elif recommended_method == 'ocr':
             # PDF scanned/hybrid → Use OCR
-            detected.add('ocr')
-            # Note: Don't remove PDF - OCR needs PDF library to convert pages to images
+            detected.add('easyocr')
+            # Note: Don't remove PyMuPDF - OCR needs PDF library to convert pages to images
 
         # DEPENDENCY SYSTEM: Automatically load required integrations
         # Define which integrations depend on others
         integration_dependencies = {
-            'ocr': ['pdf'],  # OCR needs PDF for converting PDF pages to images
+            'easyocr': ['pymupdf'],  # OCR needs PyMuPDF for converting PDF pages to images
             # Future examples:
             # 'smtp': ['regex'],  # SMTP might need regex for email templates
         }
