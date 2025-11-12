@@ -260,7 +260,7 @@ class CachedExecutor(ExecutorStrategy):
         task: str,
         context: Dict[str, Any],
         error_history: Optional[List[Dict]] = None
-    ) -> str:
+    ) -> tuple[str, Dict[str, Any]]:
         """
         Generate Python code using OpenAI API with tool calling for dynamic doc search.
 
@@ -280,7 +280,10 @@ class CachedExecutor(ExecutorStrategy):
             error_history: Optional list of previous failed attempts with errors
 
         Returns:
-            Generated Python code (cleaned and validated)
+            Tuple of (generated_code, tool_metadata) where tool_metadata contains:
+            - tool_calls: List of all tool calls made
+            - tool_iterations: Number of iterations
+            - context_summary: What context the AI saw
 
         Raises:
             ExecutorError: If generation fails after max tool iterations
@@ -292,6 +295,9 @@ class CachedExecutor(ExecutorStrategy):
         try:
             logger.info("Generating code with tool calling (dynamic doc search)...")
             start_time = time.time()
+
+            # Track all tool calls for debugging
+            all_tool_calls = []
 
             # Build initial messages (minimal prompt, no pre-loaded docs)
             messages = [
@@ -401,6 +407,14 @@ class CachedExecutor(ExecutorStrategy):
                                 top_k=arguments.get("top_k", 3)
                             )
 
+                            # Track this tool call for metadata
+                            all_tool_calls.append({
+                                "iteration": iteration + 1,
+                                "function": function_name,
+                                "arguments": arguments,
+                                "result_preview": result[:500] if result else None  # First 500 chars
+                            })
+
                             # Add tool response to messages
                             messages.append({
                                 "role": "tool",
@@ -410,10 +424,17 @@ class CachedExecutor(ExecutorStrategy):
 
                         else:
                             # Unknown tool
+                            error_msg = f"ERROR: Unknown tool '{function_name}'"
+                            all_tool_calls.append({
+                                "iteration": iteration + 1,
+                                "function": function_name,
+                                "arguments": arguments,
+                                "error": error_msg
+                            })
                             messages.append({
                                 "role": "tool",
                                 "tool_call_id": tool_call.id,
-                                "content": f"ERROR: Unknown tool '{function_name}'"
+                                "content": error_msg
                             })
 
                     # Continue loop (let AI decide next step)
@@ -442,7 +463,15 @@ class CachedExecutor(ExecutorStrategy):
 
                     logger.debug(f"Generated code ({len(code)} chars):\n{code}")
 
-                    return code
+                    # Return code + metadata about tool usage
+                    tool_metadata = {
+                        "tool_calls": all_tool_calls,
+                        "tool_iterations": iteration + 1,
+                        "total_tool_calls": len(all_tool_calls),
+                        "context_summary": self.knowledge_manager.summarize_context(context)
+                    }
+
+                    return code, tool_metadata
 
             # If we reach here, exceeded max iterations
             raise ExecutorError(
@@ -548,7 +577,7 @@ class CachedExecutor(ExecutorStrategy):
                 # 1. Generate code with OpenAI tool calling
                 # AI searches docs dynamically using search_documentation() tool
                 generation_start = time.time()
-                generated_code = await self._generate_code_with_tools(
+                generated_code, tool_metadata = await self._generate_code_with_tools(
                     task=prompt_task,
                     context=context,
                     error_history=error_history if error_history else None
@@ -557,6 +586,12 @@ class CachedExecutor(ExecutorStrategy):
 
                 logger.info(f"Code generated successfully in {generation_time_ms}ms")
                 logger.info(f"Generated code ({len(generated_code)} chars):\n{generated_code}")  # Changed to INFO to always see it
+
+                # Log tool calling details
+                if tool_metadata.get("tool_calls"):
+                    logger.info(f"🔍 AI made {tool_metadata['total_tool_calls']} documentation searches:")
+                    for i, tc in enumerate(tool_metadata["tool_calls"], 1):
+                        logger.info(f"   {i}. {tc['function']}({tc['arguments']})")
 
                 # 3. Execute code with E2B
                 execution_start = time.time()
@@ -660,9 +695,13 @@ class CachedExecutor(ExecutorStrategy):
                     "attempts": attempt,
                     "cache_hit": False,  # Phase 1 MVP - no cache yet
 
-                    # Tool calling metadata
+                    # Tool calling metadata (for debugging)
                     "tool_calling_enabled": True,
                     "retrieval_method": "dynamic_tool_calling",  # AI searches docs on demand
+                    "tool_calls": tool_metadata.get("tool_calls", []),  # All documentation searches
+                    "tool_iterations": tool_metadata.get("tool_iterations", 0),  # Number of AI iterations
+                    "total_tool_calls": tool_metadata.get("total_tool_calls", 0),  # Total searches made
+                    "context_summary": tool_metadata.get("context_summary", ""),  # What context AI saw
                 }
 
                 logger.info(
