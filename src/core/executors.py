@@ -412,7 +412,7 @@ class CachedExecutor(ExecutorStrategy):
                                 "iteration": iteration + 1,
                                 "function": function_name,
                                 "arguments": arguments,
-                                "result_preview": result[:500] if result else None  # First 500 chars
+                                "result_preview": result  # Full documentation (no truncation)
                             })
 
                             # Add tool response to messages
@@ -526,13 +526,10 @@ class CachedExecutor(ExecutorStrategy):
 
             docs_parts.append(f"\n=== Search {i}: '{query}' (source: {source}) ===\n")
 
-            # Note: result_preview is truncated to 500 chars
-            # For full docs, we'd need to store the complete result
+            # result_preview contains the full documentation the AI received
             result = tc.get("result_preview", "")
             if result:
                 docs_parts.append(result)
-                if len(result) == 500:  # Was truncated
-                    docs_parts.append("\n[... truncated in preview ...]\n")
             else:
                 docs_parts.append("[No results found]\n")
 
