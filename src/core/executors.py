@@ -402,13 +402,15 @@ class CachedExecutor(ExecutorStrategy):
                         logger.info(f"   {key}: {value}")
 
                 # 1. Build complete prompt with knowledge
-                full_prompt = self.knowledge_manager.build_prompt(
+                full_prompt, prompt_metadata = self.knowledge_manager.build_prompt(
                     task=prompt_task,
                     context=context,
                     error_history=error_history if error_history else None
                 )
 
                 logger.debug(f"Full prompt length: {len(full_prompt)} chars (~{len(full_prompt)//4} tokens)")
+                logger.debug(f"Integrations detected: {prompt_metadata['integrations_detected']}")
+                logger.debug(f"Docs retrieved: {prompt_metadata['docs_retrieved_count']} via {prompt_metadata['retrieval_method']}")
 
                 # 2. Generate code with OpenAI
                 generation_start = time.time()
@@ -497,10 +499,13 @@ class CachedExecutor(ExecutorStrategy):
                 token_info = self._estimate_tokens(full_prompt, generated_code)
 
                 result["_ai_metadata"] = {
+                    # Model & generation
                     "model": "gpt-4o-mini",
-                    "prompt": prompt_task,
+                    "prompt_task": prompt_task,  # Short task description
                     "generated_code": generated_code,
                     "code_length": len(generated_code),
+
+                    # Costs & timing
                     "tokens_input": token_info["tokens_input"],
                     "tokens_output": token_info["tokens_output"],
                     "tokens_total": token_info["tokens_total"],
@@ -509,7 +514,15 @@ class CachedExecutor(ExecutorStrategy):
                     "execution_time_ms": execution_time_ms,
                     "total_time_ms": total_time_ms,
                     "attempts": attempt,
-                    "cache_hit": False  # Phase 1 MVP - no cache yet
+                    "cache_hit": False,  # Phase 1 MVP - no cache yet
+
+                    # DEBUG INFO (new) - For troubleshooting AI failures
+                    "full_prompt": full_prompt,  # Complete prompt sent to OpenAI
+                    "full_prompt_length": len(full_prompt),
+                    "context_summary": prompt_metadata["context_summary"],  # Formatted context
+                    "integrations_detected": prompt_metadata["integrations_detected"],  # Auto-detected integrations
+                    "docs_retrieved_count": prompt_metadata["docs_retrieved_count"],  # How many doc chunks
+                    "retrieval_method": prompt_metadata["retrieval_method"],  # "vector_store" or "file_loading"
                 }
 
                 logger.info(

@@ -30,3 +30,7 @@ e2b-code-interpreter==2.2.1
 
 # AI Code Generation
 openai==1.109.1
+
+# Vector Store & RAG (Retrieval-Augmented Generation)
+chromadb==0.5.23
+sentence-transformers==3.3.1

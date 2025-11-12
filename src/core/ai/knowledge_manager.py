@@ -2,27 +2,33 @@
 KnowledgeManager - Manages knowledge base documentation for AI code generation.
 
 This component:
-1. Loads markdown documentation files with caching
+1. Loads markdown documentation files with caching (deprecated - uses vector store now)
 2. Detects which integrations are needed based on task and context
-3. Summarizes context for AI prompts
-4. Builds complete prompts for code generation
+3. Retrieves relevant documentation from vector store
+4. Summarizes context for AI prompts
+5. Builds complete prompts for code generation
 """
 
 import os
+import logging
 from typing import Dict, List, Optional
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeManager:
     """Manages knowledge base documentation for AI-powered code generation."""
 
-    def __init__(self, knowledge_base_path: Optional[str] = None):
+    def __init__(self, knowledge_base_path: Optional[str] = None, use_vector_store: bool = True):
         """
         Initialize KnowledgeManager.
 
         Args:
             knowledge_base_path: Path to knowledge base directory.
                                 Defaults to /nova/knowledge
+            use_vector_store: Use vector store for doc retrieval (recommended).
+                             If False, falls back to loading .md files directly.
         """
         if knowledge_base_path is None:
             # Default to /nova/knowledge (absolute path)
@@ -31,6 +37,20 @@ class KnowledgeManager:
 
         self.knowledge_base_path = knowledge_base_path
         self._cache: Dict[str, str] = {}  # In-memory cache for loaded files
+        self.use_vector_store = use_vector_store
+
+        # Initialize vector store if enabled
+        if use_vector_store:
+            try:
+                from .vector_store import VectorStore
+                self.vector_store = VectorStore()
+                logger.info("KnowledgeManager initialized with vector store")
+            except Exception as e:
+                logger.warning(f"Failed to initialize vector store: {e}. Falling back to file loading.")
+                self.use_vector_store = False
+                self.vector_store = None
+        else:
+            self.vector_store = None
 
     def load_file(self, relative_path: str) -> str:
         """
@@ -164,19 +184,24 @@ class KnowledgeManager:
         """
         Format context dictionary into human-readable summary for AI.
 
-        Shows types and simplified representations without hiding secrets
-        (because secrets should not be in context in the first place).
+        Shows types and simplified representations with METADATA about encoding/format.
+        This helps the AI know exactly how to handle each field.
 
         SMART TRUNCATION:
         - Heavy fields (pdf_data, image_data, etc.) are truncated to save tokens
         - Important text fields (ocr_text, email_body, etc.) are shown in full
         - Credentials and config are shown directly (they should be in env vars anyway)
 
+        METADATA ADDITIONS:
+        - Base64 fields get "BASE64-ENCODED" tag with decode instructions
+        - Binary fields get "BINARY DATA" tag
+        - Plain text fields get "PLAIN TEXT" tag
+
         Args:
             context: Context dictionary
 
         Returns:
-            Formatted string summarizing available context
+            Formatted string summarizing available context with metadata
         """
         if not context:
             return "CONTEXT AVAILABLE:\n- (empty)"
@@ -191,9 +216,20 @@ class KnowledgeManager:
             'file_data',     # Generic file data
         }
 
+        # Define which fields are base64-encoded (need decode)
+        base64_fields = {
+            'pdf_data',
+            'image_data',
+            'attachment_data',
+            'file_data',
+        }
+
         for key, value in sorted(context.items()):
             # Get type name
             value_type = type(value).__name__
+
+            # Metadata tags for the AI
+            metadata_tags = []
 
             # Create simplified representation
             if isinstance(value, bytes):
@@ -205,9 +241,12 @@ class KnowledgeManager:
                 else:
                     repr_value = f"<binary data, {size_bytes} bytes>"
 
+                metadata_tags.append("BINARY DATA (already decoded)")
+
             elif isinstance(value, str):
                 # String handling with SMART truncation
                 should_truncate = key in truncate_fields
+                is_base64 = key in base64_fields
 
                 if should_truncate and len(value) > 100:
                     # Heavy field (like base64) - truncate aggressively
@@ -216,9 +255,19 @@ class KnowledgeManager:
                     # Important text field - show in full (ocr_text, email_body, etc.)
                     repr_value = f'"{value}"'
 
+                # Add metadata tag
+                if is_base64:
+                    metadata_tags.append("BASE64-ENCODED")
+                    metadata_tags.append(f"Decode with: base64.b64decode({key})")
+                elif should_truncate:
+                    metadata_tags.append("LARGE STRING (truncated)")
+                else:
+                    metadata_tags.append("PLAIN TEXT")
+
             elif isinstance(value, (int, float, bool)):
                 # Numbers and booleans - show directly
                 repr_value = str(value)
+                metadata_tags.append("PRIMITIVE VALUE")
 
             elif isinstance(value, (list, dict)):
                 # Collections - show type and length
@@ -227,20 +276,99 @@ class KnowledgeManager:
                 else:
                     repr_value = f"<dict with {len(value)} keys>"
 
+                metadata_tags.append("COLLECTION")
+
             else:
                 # Other types - just show type
                 repr_value = f"<{value_type}>"
 
-            lines.append(f"- {key}: {repr_value} ({value_type})")
+            # Build line with metadata
+            line = f"- {key}: {repr_value} ({value_type})"
+
+            if metadata_tags:
+                line += f"\n  → {' | '.join(metadata_tags)}"
+
+            lines.append(line)
 
         return "\n".join(lines)
+
+    def retrieve_docs(
+        self,
+        task: str,
+        integrations: List[str],
+        top_k_per_integration: int = 3
+    ) -> str:
+        """
+        Retrieve relevant documentation from vector store.
+
+        Args:
+            task: Task description for semantic search
+            integrations: List of integration names (e.g., ["pymupdf", "easyocr"])
+            top_k_per_integration: How many chunks to retrieve per integration
+
+        Returns:
+            Formatted documentation string ready for prompt
+
+        Example:
+            >>> manager = KnowledgeManager()
+            >>> docs = manager.retrieve_docs(
+            ...     task="extract text from PDF",
+            ...     integrations=["pymupdf"]
+            ... )
+        """
+        if not self.use_vector_store or self.vector_store is None:
+            logger.warning("Vector store not available, returning empty docs")
+            return ""
+
+        all_docs = []
+
+        # Query for each integration
+        for integration in integrations:
+            logger.debug(f"Retrieving docs for integration: {integration}")
+
+            # Query vector store
+            results = self.vector_store.query(
+                query_text=f"{integration} {task}",
+                top_k=top_k_per_integration,
+                filter_source=integration
+            )
+
+            if results:
+                all_docs.extend(results)
+                logger.debug(f"Retrieved {len(results)} chunks for {integration}")
+
+        if not all_docs:
+            logger.warning(f"No docs found for integrations: {integrations}")
+            return ""
+
+        # Format docs for prompt
+        formatted_sections = []
+
+        for integration in integrations:
+            # Get docs for this integration
+            integration_docs = [d for d in all_docs if d['source'] == integration]
+
+            if not integration_docs:
+                continue
+
+            formatted_sections.append(f"## {integration.upper()} Documentation\n")
+
+            for doc in integration_docs:
+                formatted_sections.append(doc['text'])
+                formatted_sections.append("\n---\n")
+
+        formatted_docs = "\n".join(formatted_sections)
+
+        logger.info(f"Retrieved {len(all_docs)} total chunks from {len(integrations)} integrations")
+
+        return formatted_docs
 
     def build_prompt(
         self,
         task: str,
         context: Dict,
         error_history: Optional[List[Dict]] = None
-    ) -> str:
+    ) -> tuple[str, Dict]:
         """
         Build complete prompt for AI code generation.
 
@@ -258,9 +386,21 @@ class KnowledgeManager:
                           Format: [{"attempt": 1, "error": "...", "code": "..."}]
 
         Returns:
-            Complete prompt string ready for OpenAI API
+            Tuple of (prompt_string, metadata_dict)
+            - prompt_string: Complete prompt ready for OpenAI API
+            - metadata_dict: Debug info with keys:
+                - integrations_detected: List[str]
+                - context_summary: str
+                - docs_retrieved_count: int
+                - retrieval_method: str ("vector_store" or "file_loading")
         """
         sections = []
+        metadata = {
+            "integrations_detected": [],
+            "context_summary": "",
+            "docs_retrieved_count": 0,
+            "retrieval_method": "none"
+        }
 
         # 1. Load main.md (always included)
         try:
@@ -278,26 +418,63 @@ class KnowledgeManager:
         # 3. Context summary
         context_summary = self.summarize_context(context)
         sections.append(f"\n{context_summary}\n")
+        metadata["context_summary"] = context_summary
 
         sections.append("\n---\n")
 
         # 4. Integration docs (auto-detected based on task and context)
         integrations = self.detect_integrations(task, context)
+        metadata["integrations_detected"] = integrations
 
         if integrations:
             sections.append("## INTEGRATION DOCUMENTATION\n\n")
             sections.append(f"Relevant integrations detected: {', '.join(integrations)}\n\n")
 
-            for integration in integrations:
-                try:
-                    integration_path = f"integrations/{integration}.md"
-                    integration_doc = self.load_file(integration_path)
-                    sections.append(f"### {integration.upper()}\n\n")
-                    sections.append(integration_doc)
-                    sections.append("\n\n---\n\n")
-                except FileNotFoundError:
-                    # Skip if integration doc doesn't exist
-                    sections.append(f"(Integration doc for '{integration}' not found)\n\n")
+            # Use vector store retrieval if available, otherwise fall back to file loading
+            if self.use_vector_store and self.vector_store is not None:
+                # NEW: Retrieve docs from vector store
+                logger.info(f"Retrieving docs for integrations: {integrations}")
+
+                # Track retrieval stats
+                docs_count = 0
+                for integration in integrations:
+                    results = self.vector_store.query(
+                        query_text=f"{integration} {task}",
+                        top_k=3,  # 3 most relevant chunks per integration
+                        filter_source=integration
+                    )
+                    docs_count += len(results)
+
+                metadata["retrieval_method"] = "vector_store"
+                metadata["docs_retrieved_count"] = docs_count
+
+                retrieved_docs = self.retrieve_docs(
+                    task=task,
+                    integrations=integrations,
+                    top_k_per_integration=3
+                )
+
+                if retrieved_docs:
+                    sections.append(retrieved_docs)
+                else:
+                    sections.append("(No relevant documentation found in vector store)\n\n")
+
+            else:
+                # FALLBACK: Load from .md files (old method)
+                logger.info("Using fallback file loading for integration docs")
+                metadata["retrieval_method"] = "file_loading"
+                metadata["docs_retrieved_count"] = len(integrations)  # One doc per integration
+
+                for integration in integrations:
+                    try:
+                        integration_path = f"integrations/{integration}.md"
+                        integration_doc = self.load_file(integration_path)
+                        sections.append(f"### {integration.upper()}\n\n")
+                        sections.append(integration_doc)
+                        sections.append("\n\n---\n\n")
+                    except FileNotFoundError:
+                        # Skip if integration doc doesn't exist
+                        sections.append(f"(Integration doc for '{integration}' not found)\n\n")
 
         # 5. Error history - Show ALL previous failed attempts
         if error_history and len(error_history) > 0:
@@ -384,4 +561,5 @@ class KnowledgeManager:
         sections.append("- Follow the patterns shown in the integration documentation\n")
         sections.append("- Return context updates via 'context_updates' key in JSON output\n")
 
-        return "".join(sections)
+        full_prompt = "".join(sections)
+        return full_prompt, metadata
