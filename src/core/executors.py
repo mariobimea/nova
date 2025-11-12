@@ -503,6 +503,41 @@ class CachedExecutor(ExecutorStrategy):
 
         return "\n".join(lines)
 
+    def _extract_full_documentation(self, tool_calls: List[Dict]) -> str:
+        """
+        Extract full documentation content from tool call results.
+
+        This reconstructs what documentation the AI actually had access to
+        when generating code. Useful for debugging why AI made certain choices.
+
+        Args:
+            tool_calls: List of tool call dicts with 'result_preview' field
+
+        Returns:
+            Concatenated documentation content
+        """
+        if not tool_calls:
+            return ""
+
+        docs_parts = []
+        for i, tc in enumerate(tool_calls, 1):
+            query = tc.get("arguments", {}).get("query", "unknown")
+            source = tc.get("arguments", {}).get("source", "all")
+
+            docs_parts.append(f"\n=== Search {i}: '{query}' (source: {source}) ===\n")
+
+            # Note: result_preview is truncated to 500 chars
+            # For full docs, we'd need to store the complete result
+            result = tc.get("result_preview", "")
+            if result:
+                docs_parts.append(result)
+                if len(result) == 500:  # Was truncated
+                    docs_parts.append("\n[... truncated in preview ...]\n")
+            else:
+                docs_parts.append("[No results found]\n")
+
+        return "".join(docs_parts)
+
     async def execute(
         self,
         code: str,  # In CachedExecutor, this is the PROMPT (natural language)
@@ -678,6 +713,11 @@ class CachedExecutor(ExecutorStrategy):
                     (estimated_tokens_output / 1_000_000) * 2.00    # Output cost
                 )
 
+                # Extract full documentation that AI received
+                documentation_retrieved = self._extract_full_documentation(
+                    tool_metadata.get("tool_calls", [])
+                )
+
                 result["_ai_metadata"] = {
                     # Model & generation
                     "model": "gpt-4o-mini",
@@ -702,6 +742,7 @@ class CachedExecutor(ExecutorStrategy):
                     "tool_iterations": tool_metadata.get("tool_iterations", 0),  # Number of AI iterations
                     "total_tool_calls": tool_metadata.get("total_tool_calls", 0),  # Total searches made
                     "context_summary": tool_metadata.get("context_summary", ""),  # What context AI saw
+                    "documentation_retrieved": documentation_retrieved,  # Full docs AI had access to
                 }
 
                 logger.info(

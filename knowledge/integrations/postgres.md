@@ -37,6 +37,76 @@ conn.close()
 
 ---
 
+## INSERT with RETURNING (Get Inserted ID)
+
+**CRITICAL**: After INSERT, you MUST capture the returned ID using `fetchone()`:
+
+```python
+import psycopg2
+import json
+
+# Connect
+conn = psycopg2.connect(
+    host=context['db_host'],
+    port=context['db_port'],
+    database=context['db_name'],
+    user=context['db_user'],
+    password=context['db_password']
+)
+
+cursor = conn.cursor()
+
+# INSERT with RETURNING
+cursor.execute("""
+    INSERT INTO invoices (
+        email_from, email_subject, total_amount, currency
+    ) VALUES (%s, %s, %s, %s)
+    RETURNING id
+""", (
+    context['email_from'],
+    context['email_subject'],
+    context['total_amount'],
+    'EUR'
+))
+
+# ⚠️ MUST fetch the returned ID BEFORE commit
+inserted_id = cursor.fetchone()[0]
+
+conn.commit()
+cursor.close()
+conn.close()
+
+# Now you can use inserted_id in the output
+print(json.dumps({
+    "status": "success",
+    "context_updates": {"invoice_id": inserted_id},
+    "message": f"Invoice {inserted_id} saved successfully"
+}))
+```
+
+**Common Mistake - DO NOT do this**:
+
+```python
+# ❌ WRONG - inserted_id is never defined!
+cursor.execute("""
+    INSERT INTO invoices (...) VALUES (...)
+    RETURNING id
+""", (...))
+
+conn.commit()
+
+# This will fail: NameError: name 'inserted_id' is not defined
+print(json.dumps({"message": inserted_id}))
+```
+
+**Correct order**:
+1. Execute INSERT with RETURNING
+2. **Fetch the returned ID**: `inserted_id = cursor.fetchone()[0]`
+3. Commit transaction
+4. Use `inserted_id` in output
+
+---
+
 ## Connection with Context Manager
 
 Use `with` statement for automatic transaction management:
