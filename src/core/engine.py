@@ -281,7 +281,9 @@ class GraphEngine:
                 updated_context = await executor.execute(
                     code=code_or_prompt,  # This is either code or prompt depending on executor
                     context=context.get_all(),
-                    timeout=node.timeout
+                    timeout=node.timeout,
+                    workflow=workflow_definition,  # Pass workflow for model resolution
+                    node={"id": node.id, "type": "ActionNode", "model": getattr(node, "model", None)}  # Pass node for model resolution
                 )
 
                 # DEBUG: Log what executor returned
@@ -358,7 +360,9 @@ class GraphEngine:
                 updated_context = await executor.execute(
                     code=code_or_prompt,  # This is either code or prompt depending on executor
                     context=context.get_all(),
-                    timeout=node.timeout
+                    timeout=node.timeout,
+                    workflow=workflow_definition,  # Pass workflow for model resolution
+                    node={"id": node.id, "type": "DecisionNode", "model": getattr(node, "model", None)}  # Pass node for model resolution
                 )
 
                 # Extract AI metadata if present (only for CachedExecutor)

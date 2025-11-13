@@ -12,7 +12,7 @@
       "type": "action",
       "label": "Read Email and Extract PDF",
       "executor": "cached",
-      "prompt": "Connect to IMAP server and read the first unread email from mario@bimea.es only. Extract email metadata (From, Subject, Date). If the email has a PDF attachment, extract it and encode to base64. Then mark the email as read. Store in context: email_from (string), email_subject (string), email_date (string), has_pdf (boolean), pdf_filename (string if PDF exists), pdf_data (base64 string if PDF exists). Store only primitive values, never objects.",
+      "prompt": "Connect to the email inbox and read the first unread email from mario@bimea.es. Extract email metadata. If there's a PDF attachment, extract it and encode to base64. Mark the email as read. Store in context: email_from, email_subject, email_date, has_pdf (boolean), pdf_filename (if exists), pdf_data (base64 if exists). Use only primitive values.",
       "timeout": 60
     },
     {
@@ -28,7 +28,15 @@
       "type": "action",
       "label": "Send Rejection Email",
       "executor": "cached",
-      "prompt": "Send rejection email to email_from explaining that the email doesn't contain a PDF attachment. Ask them to resend with PDF. Use SMTP with TLS.",
+      "prompt": "Send a rejection email to the sender explaining that their email doesn't contain a PDF attachment. Ask them to resend with a PDF. Use the email_from from context as recipient.",
+      "timeout": 30
+    },
+    {
+      "id": "check_pdf_type",
+      "type": "action",
+      "label": "Check PDF Type",
+      "executor": "e2b",
+      "code": "import fitz  # PyMuPDF\nimport io\nimport base64\nimport json\n\ntry:\n    # Decode PDF from base64\n    pdf_data_base64 = context['pdf_data']\n    pdf_bytes = base64.b64decode(pdf_data_base64)\n    \n    # Open PDF\n    pdf_stream = io.BytesIO(pdf_bytes)\n    doc = fitz.open(stream=pdf_stream, filetype='pdf')\n    \n    # Extract text from first page\n    first_page_text = doc[0].get_text()\n    text_length = len(first_page_text.strip())\n    \n    doc.close()\n    \n    # Classify PDF based on text amount\n    if text_length > 100:\n        pdf_type = 'digital'\n        recommended_method = 'text'\n    elif text_length > 0:\n        pdf_type = 'hybrid'\n        recommended_method = 'ocr'\n    else:\n        pdf_type = 'scanned'\n        recommended_method = 'ocr'\n    \n    # Update context\n    context['pdf_type'] = pdf_type\n    context['pdf_text_length'] = text_length\n    context['pdf_has_text_layer'] = text_length > 0\n    context['recommended_extraction_method'] = recommended_method\n    \nexcept Exception as e:\n    context['pdf_type'] = 'unknown'\n    context['recommended_extraction_method'] = 'text'\n    context['check_pdf_error'] = str(e)",
       "timeout": 30
     },
     {
@@ -36,7 +44,7 @@
       "type": "action",
       "label": "Extract Text from PDF",
       "executor": "cached",
-      "prompt": "Extract text from PDF using PyMuPDF library (import fitz). The PDF is base64-encoded in context['pdf_data']. Decode it using base64.b64decode(), open with fitz.open() from BytesIO stream, extract text from ALL pages using page.get_text() method, and store the complete text in context['ocr_text']. Also set context['extraction_method_used'] = 'pymupdf'.",
+      "prompt": "Extract all text content from the PDF. The PDF is base64-encoded in context['pdf_data']. Use context['recommended_extraction_method'] and context['pdf_type'] to decide the best approach. Extract text from ALL pages and store the complete result in context['ocr_text']. Also store the library/method you used in context['extraction_method_used'].",
       "timeout": 90
     },
     {
@@ -44,7 +52,7 @@
       "type": "action",
       "label": "Find Total Amount",
       "executor": "cached",
-      "prompt": "Find the total invoice amount from ocr_text using regex patterns. Look for Spanish invoice terms like 'total', 'importe total', 'Total sin IVA', etc. Handle European number format (comma as decimal separator like 279,00). Convert to float and store in total_amount. Set to 0.0 if not found.",
+      "prompt": "Find the total invoice amount from the extracted text in context['ocr_text']. Look for common invoice total indicators in Spanish. Handle European number formats. Store the amount as a float in context['total_amount']. If not found, set to 0.0.",
       "timeout": 30
     },
     {
@@ -60,7 +68,7 @@
       "type": "action",
       "label": "Send High Budget Email",
       "executor": "cached",
-      "prompt": "Send email to email_from notifying that the invoice amount exceeds €1000 threshold and will require manual review. Use SMTP with TLS.",
+      "prompt": "Send an email to the sender notifying that the invoice amount exceeds the €1000 threshold and will require manual review. Use email_from from context as recipient.",
       "timeout": 30
     },
     {
@@ -68,7 +76,7 @@
       "type": "action",
       "label": "Save Invoice to Database",
       "executor": "cached",
-      "prompt": "Save invoice to PostgreSQL 'invoices' table. Decode PDF from base64 to bytea. Use the extraction_method_used value from context for ocr_method field. Set currency='EUR'. Return the inserted ID.",
+      "prompt": "Save the invoice to the database 'invoices' table. Store the PDF (decode from base64), extracted text, amount, sender info, and extraction method used. Set currency to EUR. Return the inserted record ID.",
       "timeout": 60
     },
     {
@@ -93,12 +101,16 @@
     },
     {
       "from": "has_pdf_decision",
-      "to": "extract_text_from_pdf",
+      "to": "check_pdf_type",
       "condition": "true"
     },
     {
       "from": "send_rejection_email",
       "to": "end"
+    },
+    {
+      "from": "check_pdf_type",
+      "to": "extract_text_from_pdf"
     },
     {
       "from": "extract_text_from_pdf",
@@ -120,7 +132,7 @@
     },
     {
       "from": "send_high_budget_email",
-      "to": "end"
+      "to": "save_invoice_to_db"
     },
     {
       "from": "save_invoice_to_db",

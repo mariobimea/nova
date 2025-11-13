@@ -1,0 +1,61 @@
+{
+  "name": "Invoice Processing with Multiple Models",
+  "description": "Example workflow demonstrating model selection at workflow and node levels",
+  "model": "gpt-4o-mini",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start"
+    },
+    {
+      "id": "extract_invoice",
+      "type": "action",
+      "executor": "cached",
+      "prompt": "Extract invoice number, date, vendor name, and total amount from the PDF",
+      "timeout": 30
+    },
+    {
+      "id": "validate_format",
+      "type": "action",
+      "executor": "cached",
+      "model": "gpt-5-mini",
+      "prompt": "Validate that the invoice data has all required fields and correct format",
+      "timeout": 20
+    },
+    {
+      "id": "decision_valid",
+      "type": "decision",
+      "executor": "cached",
+      "prompt": "Check if invoice is valid (all fields present and formatted correctly)",
+      "timeout": 15
+    },
+    {
+      "id": "complex_tax_calculation",
+      "type": "action",
+      "executor": "cached",
+      "model": "gpt-5-codex",
+      "prompt": "Calculate taxes based on invoice amount, vendor country, and current tax rules. Handle international tax regulations.",
+      "timeout": 45
+    },
+    {
+      "id": "simple_notification",
+      "type": "action",
+      "executor": "cached",
+      "prompt": "Send a simple email notification about invoice processing status",
+      "timeout": 20
+    },
+    {
+      "id": "end",
+      "type": "end"
+    }
+  ],
+  "edges": [
+    {"from": "start", "to": "extract_invoice"},
+    {"from": "extract_invoice", "to": "validate_format"},
+    {"from": "validate_format", "to": "decision_valid"},
+    {"from": "decision_valid", "to": "complex_tax_calculation", "condition": "true"},
+    {"from": "decision_valid", "to": "simple_notification", "condition": "false"},
+    {"from": "complex_tax_calculation", "to": "end"},
+    {"from": "simple_notification", "to": "end"}
+  ]
+}

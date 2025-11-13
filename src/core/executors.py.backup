@@ -108,34 +108,36 @@ class CachedExecutor(ExecutorStrategy):
     Phase 2: Hash-based cache + semantic cache with embeddings
     """
 
-    def __init__(self, db_session: Optional[Any] = None, default_model: str = "gpt-4o-mini"):
+    def __init__(self, db_session: Optional[Any] = None):
         """
         Initialize CachedExecutor.
 
         Args:
             db_session: Optional SQLAlchemy session for cache lookups (Phase 2).
                        Currently unused in Phase 1 (no cache implementation yet).
-            default_model: Default model to use if not specified in workflow/node.
-                          Defaults to "gpt-4o-mini" (cheapest OpenAI model).
 
         Requires OPENAI_API_KEY environment variable.
         """
         import os
         from .ai.knowledge_manager import KnowledgeManager
-        from .model_registry import ModelRegistry
 
         # Store db_session for future cache implementation (Phase 2)
         self.db_session = db_session
 
-        # Store default model
-        self.default_model = default_model
-
-        # Validate that default model exists
-        if not ModelRegistry.is_valid_model(default_model):
-            available = ModelRegistry.list_models()
+        # Initialize OpenAI client
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
             raise ValueError(
-                f"Invalid default_model: '{default_model}'. "
-                f"Available models: {', '.join(available)}"
+                "OPENAI_API_KEY environment variable is required for CachedExecutor. "
+                "Get API key at: https://platform.openai.com/api-keys"
+            )
+
+        try:
+            import openai
+            self.openai_client = openai.OpenAI(api_key=api_key)
+        except ImportError:
+            raise ImportError(
+                "OpenAI library not installed. Install with: pip install openai"
             )
 
         # Initialize E2B executor (for code execution)
@@ -146,50 +148,350 @@ class CachedExecutor(ExecutorStrategy):
         # Initialize Knowledge Manager (for prompt building)
         self.knowledge_manager = KnowledgeManager()
 
-        logger.info(f"CachedExecutor initialized with default model: {default_model}")
+        logger.info("CachedExecutor initialized with OpenAI gpt-5-mini")
 
-    def _resolve_model(
-        self,
-        node: Optional[Dict[str, Any]],
-        workflow: Optional[Dict[str, Any]]
-    ) -> str:
+    def _clean_code_blocks(self, code: str) -> str:
         """
-        Resolve which model to use for code generation.
+        Remove markdown code blocks and explanations from AI-generated code.
 
-        Priority (highest to lowest):
-        1. Node-level model specification (node.get("model"))
-        2. Workflow-level model specification (workflow.get("model"))
-        3. Default model from __init__
+        OpenAI often wraps code in ```python ... ``` blocks and adds
+        explanatory text before/after. This function extracts just the code.
 
         Args:
-            node: Optional node dictionary (may contain "model" field)
-            workflow: Optional workflow dictionary (may contain "model" field)
+            code: Raw output from OpenAI API
 
         Returns:
-            Model name to use
-
-        Example:
-            >>> executor = CachedExecutor(default_model="gpt-4o-mini")
-            >>> executor._resolve_model(
-            ...     node={"model": "gpt-5-codex"},
-            ...     workflow={"model": "gpt-5-mini"}
-            ... )
-            "gpt-5-codex"  # Node overrides workflow
+            Clean Python code without markdown or explanations
         """
-        # Priority 1: Node-level model
-        if node and node.get("model"):
-            return node["model"]
+        import re
 
-        # Priority 2: Workflow-level model
-        if workflow and workflow.get("model"):
-            return workflow["model"]
+        # Remove markdown code blocks
+        # Pattern: ```python\ncode\n``` or ```\ncode\n```
+        code_block_pattern = r'```(?:python)?\s*\n(.*?)\n```'
+        matches = re.findall(code_block_pattern, code, re.DOTALL)
 
-        # Priority 3: Default model
-        return self.default_model
+        if matches:
+            # Take the first code block
+            code = matches[0]
 
-    # NOTE: Methods _clean_code_blocks(), _validate_syntax(), and _estimate_tokens()
-    # removed - now implemented in OpenAIProvider for better separation of concerns
-    # This keeps CachedExecutor clean and provider-agnostic
+        # Remove common explanatory phrases at start/end
+        lines = code.split('\n')
+        cleaned_lines = []
+
+        for line in lines:
+            stripped = line.strip().lower()
+
+            # Skip explanation lines
+            if any(phrase in stripped for phrase in [
+                "here's the code",
+                "here is the code",
+                "this code will",
+                "the code above",
+                "explanation:",
+                "note:",
+            ]):
+                continue
+
+            cleaned_lines.append(line)
+
+        return '\n'.join(cleaned_lines).strip()
+
+    def _validate_syntax(self, code: str) -> None:
+        """
+        Validate Python syntax using ast.parse().
+
+        Args:
+            code: Python code to validate
+
+        Raises:
+            CodeExecutionError: If syntax is invalid
+        """
+        import ast
+
+        try:
+            ast.parse(code)
+        except SyntaxError as e:
+            raise CodeExecutionError(
+                message=f"Generated code has invalid syntax: {e}",
+                code=code,
+                error_details=str(e)
+            )
+
+    def _estimate_tokens(self, prompt: str, code: str) -> Dict[str, Any]:
+        """
+        Estimate token usage and cost.
+
+        Uses simple estimation: ~4 characters = 1 token
+        (Actual tokenization is more complex, but this is close enough)
+
+        OpenAI gpt-5-mini pricing (as of 2025):
+        - Input: $0.25 / 1M tokens
+        - Output: $2.00 / 1M tokens
+
+        Args:
+            prompt: Input prompt sent to OpenAI
+            code: Generated code from OpenAI
+
+        Returns:
+            Dictionary with token counts and estimated cost
+        """
+        # Simple estimation: ~4 chars per token
+        input_tokens = len(prompt) // 4
+        output_tokens = len(code) // 4
+
+        # gpt-5-mini pricing (per 1M tokens)
+        input_cost_per_1m = 0.25
+        output_cost_per_1m = 2.00
+
+        # Calculate cost in USD
+        input_cost = (input_tokens / 1_000_000) * input_cost_per_1m
+        output_cost = (output_tokens / 1_000_000) * output_cost_per_1m
+        total_cost = input_cost + output_cost
+
+        return {
+            "tokens_input": input_tokens,
+            "tokens_output": output_tokens,
+            "tokens_total": input_tokens + output_tokens,
+            "cost_usd": round(total_cost, 6)  # Round to 6 decimals ($0.000001)
+        }
+
+    async def _generate_code_with_tools(
+        self,
+        task: str,
+        context: Dict[str, Any],
+        error_history: Optional[List[Dict]] = None,
+        system_message: Optional[str] = None
+    ) -> tuple[str, Dict[str, Any]]:
+        """
+        Generate Python code using OpenAI API with tool calling for dynamic doc search.
+
+        The AI can use search_documentation() tool to find relevant docs iteratively.
+        This replaces the old approach of pre-loading all docs upfront.
+
+        Flow:
+        1. AI receives task + context (NO pre-loaded docs)
+        2. AI decides: "Do I need docs?" → calls search_documentation()
+        3. We execute search → return results to AI
+        4. AI decides: "Need more docs?" → repeat OR "Ready" → generate code
+        5. Return generated code
+
+        Args:
+            task: Natural language task description
+            context: Workflow context dictionary
+            error_history: Optional list of previous failed attempts with errors
+
+        Returns:
+            Tuple of (generated_code, tool_metadata) where tool_metadata contains:
+            - tool_calls: List of all tool calls made
+            - tool_iterations: Number of iterations
+            - context_summary: What context the AI saw
+
+        Raises:
+            ExecutorError: If generation fails after max tool iterations
+        """
+        import time
+        import json
+        from .ai.tools import get_all_tools, execute_search_documentation
+
+        try:
+            logger.info("Generating code with tool calling (dynamic doc search)...")
+            start_time = time.time()
+
+            # Track all tool calls for debugging
+            all_tool_calls = []
+
+            # Build initial messages (minimal prompt, no pre-loaded docs)
+            # Use custom system message if provided (for AI self-determination)
+            if system_message:
+                system_content = system_message
+            else:
+                system_content = (
+                    "You are a Python code generator for the NOVA workflow engine.\n\n"
+                    "first, analyze the input data that you have to process and teh context"
+                    "TOOLS AVAILABLE:\n"
+                    "- search_documentation(query, source?, top_k?): Search integration docs for code examples\n\n"
+                    "WORKFLOW:\n"
+                    "1. Analyze the task and context\n"
+                    "2. IF you need docs: Use search_documentation() to find relevant API docs\n"
+                    "   - Search for specific patterns (e.g., 'send email SMTP', 'open PDF bytes')\n"
+                    "   - You can search 2-3 times max if needed\n"
+                    "3. Once you have enough info (or if docs aren't needed), generate Python code immediately\n\n"
+                    "IMPORTANT:\n"
+                    "- Don't search excessively - 1-3 searches should be enough\n"
+                    "- If you can solve the task without docs, do it directly\n"
+                    "- Generate code as soon as you have sufficient information\n\n"
+                    "CODE REQUIREMENTS:\n"
+                    "- Use only pre-installed libraries (see environment specs below)\n"
+                        "- Code MUST end with EXACTLY ONE print(json.dumps({...})) statement\n"
+                        "- Output format: {\"status\": \"success\", \"context_updates\": {...}, \"message\": \"...\"}\n"
+                        "- Include proper error handling\n"
+                        "- Return ONLY code, no explanations\n\n"
+                        "ENVIRONMENT:\n"
+                        "- Python 3.11 in E2B sandbox\n"
+                        "- Pre-installed: pymupdf (import as 'fitz'), easyocr, requests, pandas, psycopg2\n"
+                        "- SMTP/IMAP: Use smtplib/imaplib from standard library\n"
+                        "- Context dict is injected automatically (access with context['key'])\n"
+                        "- Network access available\n"
+                )
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": system_content
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"TASK:\n{task}\n\n"
+                        f"CONTEXT AVAILABLE:\n{self.knowledge_manager.summarize_context(context)}\n\n"
+                        + (
+                            f"PREVIOUS FAILED ATTEMPTS:\n{self._format_error_history(error_history)}\n\n"
+                            if error_history else ""
+                        ) +
+                        "Use search_documentation() to find relevant docs, then generate code."
+                    )
+                }
+            ]
+
+            # Tool calling loop
+            tools = get_all_tools()
+            max_tool_iterations = 15  # Prevent infinite loops (increased for complex tasks)
+            tool_call_count = 0
+
+            for iteration in range(max_tool_iterations):
+                logger.info(f"🔄 Tool calling iteration {iteration + 1}/{max_tool_iterations}")
+
+                # Call OpenAI with tools
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",  # AI decides if it needs tools
+                    temperature=0.2,
+                    max_tokens=2000
+                )
+
+                message = response.choices[0].message
+
+                # Log what AI is doing
+                if message.content:
+                    logger.info(f"💭 AI thinking: {message.content[:150]}...")
+
+                # Case 1: AI wants to use a tool
+                if message.tool_calls:
+                    tool_call_count += len(message.tool_calls)
+                    logger.info(f"🔧 AI requested {len(message.tool_calls)} tool call(s)")
+
+                    # Add assistant message with tool_calls to history
+                    messages.append({
+                        "role": "assistant",
+                        "content": message.content,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": tc.type,
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            }
+                            for tc in message.tool_calls
+                        ]
+                    })
+
+                    # Execute each tool call
+                    for tool_call in message.tool_calls:
+                        function_name = tool_call.function.name
+                        arguments = json.loads(tool_call.function.arguments)
+
+                        logger.info(f"Executing tool: {function_name}({arguments})")
+
+                        if function_name == "search_documentation":
+                            # Execute search
+                            result = execute_search_documentation(
+                                vector_store=self.knowledge_manager.vector_store,
+                                query=arguments.get("query"),
+                                source=arguments.get("source"),
+                                top_k=arguments.get("top_k", 3)
+                            )
+
+                            # Track this tool call for metadata
+                            all_tool_calls.append({
+                                "iteration": iteration + 1,
+                                "function": function_name,
+                                "arguments": arguments,
+                                "result_preview": result  # Full documentation (no truncation)
+                            })
+
+                            # Add tool response to messages
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": result
+                            })
+
+                        else:
+                            # Unknown tool
+                            error_msg = f"ERROR: Unknown tool '{function_name}'"
+                            all_tool_calls.append({
+                                "iteration": iteration + 1,
+                                "function": function_name,
+                                "arguments": arguments,
+                                "error": error_msg
+                            })
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": error_msg
+                            })
+
+                    # Continue loop (let AI decide next step)
+                    continue
+
+                # Case 2: AI generated code (no tool calls)
+                else:
+                    raw_code = message.content
+
+                    if not raw_code:
+                        raise ExecutorError("OpenAI returned empty response")
+
+                    generation_time_ms = int((time.time() - start_time) * 1000)
+                    logger.info(
+                        f"Code generated successfully after {tool_call_count} tool call(s) "
+                        f"in {generation_time_ms}ms"
+                    )
+
+                    # Clean and validate code
+                    code = self._clean_code_blocks(raw_code)
+
+                    if not code:
+                        raise ExecutorError("Generated code is empty after cleaning")
+
+                    self._validate_syntax(code)
+
+                    logger.debug(f"Generated code ({len(code)} chars):\n{code}")
+
+                    # Return code + metadata about tool usage
+                    tool_metadata = {
+                        "tool_calls": all_tool_calls,
+                        "tool_iterations": iteration + 1,
+                        "total_tool_calls": len(all_tool_calls),
+                        "context_summary": self.knowledge_manager.summarize_context(context)
+                    }
+
+                    return code, tool_metadata
+
+            # If we reach here, exceeded max iterations
+            raise ExecutorError(
+                f"Exceeded max tool iterations ({max_tool_iterations}) without generating code"
+            )
+
+        except Exception as e:
+            if isinstance(e, (ExecutorError, CodeExecutionError)):
+                raise
+
+            logger.exception(f"OpenAI code generation with tools failed: {e}")
+            raise ExecutorError(f"Failed to generate code with tool calling: {e}")
 
     def _format_error_history(self, error_history: Optional[List[Dict]]) -> str:
         """Format error history for tool calling prompt."""
@@ -245,9 +547,7 @@ class CachedExecutor(ExecutorStrategy):
         self,
         code: str,  # In CachedExecutor, this is the PROMPT (natural language)
         context: Dict[str, Any],
-        timeout: int,
-        workflow: Optional[Dict[str, Any]] = None,
-        node: Optional[Dict[str, Any]] = None
+        timeout: int
     ) -> Dict[str, Any]:
         """
         Execute workflow node by generating code with AI and running in E2B.
@@ -256,19 +556,16 @@ class CachedExecutor(ExecutorStrategy):
         not hardcoded Python code.
 
         Flow:
-        1. Resolve which model to use (node > workflow > default)
-        2. Get model provider from registry
-        3. Generate Python code with provider (retry up to 3 times)
-        4. Execute generated code in E2B sandbox
-        5. If execution fails, retry with error feedback
-        6. Return result with AI metadata
+        1. Build complete prompt with KnowledgeManager (task + context + integration docs)
+        2. Generate Python code with OpenAI (retry up to 3 times)
+        3. Execute generated code in E2B sandbox
+        4. If execution fails, retry with error feedback
+        5. Return result with AI metadata
 
         Args:
             code: Natural language prompt/task description (NOT Python code)
             context: Current workflow context
             timeout: Execution timeout in seconds (for E2B)
-            workflow: Optional workflow dictionary (for model resolution)
-            node: Optional node dictionary (for model resolution)
 
         Returns:
             Updated context with AI metadata:
@@ -294,26 +591,11 @@ class CachedExecutor(ExecutorStrategy):
             E2BExecutionError: If execution fails after 3 attempts
         """
         import time
-        from .model_registry import ModelRegistry
 
         prompt_task = code  # 'code' parameter is actually the prompt
         error_history = []
         generated_code = None
         total_start_time = time.time()
-
-        # ═══════════════════════════════════════════════════════════════
-        # MODEL RESOLUTION: Determine which model to use
-        # ═══════════════════════════════════════════════════════════════
-
-        model_name = self._resolve_model(node, workflow)
-        logger.info(f"Resolved model: {model_name}")
-
-        # Get provider from registry
-        try:
-            provider = ModelRegistry.get_provider(model_name)
-            logger.info(f"Using provider: {provider.__class__.__name__}")
-        except ValueError as e:
-            raise ExecutorError(f"Failed to get model provider: {e}")
 
         logger.info(f"CachedExecutor executing task: {prompt_task[:100]}...")
 
@@ -364,12 +646,11 @@ class CachedExecutor(ExecutorStrategy):
                         is_first_stage=(stage_num == 1 and attempt == 1)
                     )
 
-                    generated_code, tool_metadata = await provider.generate_code_with_tools(
+                    generated_code, tool_metadata = await self._generate_code_with_tools(
                         task=prompt_task,
                         context=enriched_context,
                         error_history=error_history if error_history else None,
-                        system_message=system_prompt,  # Override with self-determination prompt
-                        knowledge_manager=self.knowledge_manager
+                        system_message=system_prompt  # Override with self-determination prompt
                     )
                     generation_time_ms = int((time.time() - generation_start) * 1000)
 
@@ -516,12 +797,14 @@ class CachedExecutor(ExecutorStrategy):
                 # 4. Success! Add AI metadata
                 total_time_ms = int((time.time() - total_start_time) * 1000)
 
-                # Estimate tokens using provider's method
-                estimated_tokens_input = provider.estimate_tokens(prompt_task + str(context))
-                estimated_tokens_output = provider.estimate_tokens(generated_code)
-
-                # Calculate cost using provider's pricing
-                estimated_cost = provider.estimate_cost(estimated_tokens_input, estimated_tokens_output)
+                # Estimate tokens (rough approximation for tool calling mode)
+                # Actual token usage would need to be extracted from OpenAI response usage field
+                estimated_tokens_input = len(prompt_task) // 4 + len(str(context)) // 4
+                estimated_tokens_output = len(generated_code) // 4
+                estimated_cost = (
+                    (estimated_tokens_input / 1_000_000) * 0.25 +  # Input cost
+                    (estimated_tokens_output / 1_000_000) * 2.00    # Output cost
+                )
 
                 # Extract full documentation that AI received
                 documentation_retrieved = self._extract_full_documentation(
@@ -530,7 +813,7 @@ class CachedExecutor(ExecutorStrategy):
 
                 result["_ai_metadata"] = {
                     # Model & generation
-                    "model": model_name,  # Use resolved model name
+                    "model": "gpt-4o-mini",
                     "prompt_task": prompt_task,  # Short task description
                     "generated_code": generated_code,
                     "code_length": len(generated_code),
@@ -622,6 +905,327 @@ class CachedExecutor(ExecutorStrategy):
     # ═══════════════════════════════════════════════════════════════════════
     # AI SELF-DETERMINATION: Two-Stage Code Generation
     # ═══════════════════════════════════════════════════════════════════════
+
+    def _detect_stage_from_code(self, code: str) -> str:
+        """
+        Heuristic: Determine if Stage 1 (data analysis) is needed.
+
+        Checks for complex data that would benefit from analysis before
+        generating task code. This helps AI make better decisions about
+        how to process the data.
+
+        Triggers for analysis:
+        1. Large base64 strings (>10KB, likely files: PDFs, images, documents)
+        2. Keys suggesting files (pdf_*, image_*, file_*, attachment_*, document_*)
+        3. Very large text fields (>50KB, might need preview/summary)
+
+        Args:
+            context: Workflow context dictionary
+
+        Returns:
+            True if data analysis recommended, False otherwise
+
+        Examples:
+            >>> _needs_data_analysis({"pdf_data_b64": "JVBERi0..." (500KB)})
+            True  # Large PDF → should analyze type (digital vs scanned)
+
+            >>> _needs_data_analysis({"email_subject": "Invoice", "total": 100})
+            False  # Simple data → no analysis needed
+        """
+        for key, value in context.items():
+            # Skip internal/metadata keys
+            if key.startswith('_'):
+                continue
+
+            if isinstance(value, str):
+                # Check 1: Large base64 strings (likely files)
+                # Base64 typically ends with '=' or '=='
+                is_likely_base64 = len(value) > 10000 and value[-2:] in ['==', '=']
+
+                if is_likely_base64:
+                    logger.debug(
+                        f"Large base64 detected in '{key}': {len(value)} chars "
+                        f"→ Analysis recommended"
+                    )
+                    return True
+
+                # Check 2: Keys suggesting files
+                file_keywords = [
+                    'pdf', 'image', 'img', 'photo', 'picture',
+                    'file', 'attachment', 'document', 'doc'
+                ]
+                key_suggests_file = any(kw in key.lower() for kw in file_keywords)
+
+                if key_suggests_file and len(value) > 5000:
+                    logger.debug(
+                        f"File-like key '{key}' with large data ({len(value)} chars) "
+                        f"→ Analysis recommended"
+                    )
+                    return True
+
+                # Check 3: Very large text fields (might need preview)
+                if len(value) > 50000:
+                    logger.debug(
+                        f"Very large text field '{key}': {len(value)} chars "
+                        f"→ Analysis recommended"
+                    )
+                    return True
+
+        # No complex data detected
+        logger.debug("No complex data requiring analysis found in context")
+        return False
+
+    def _build_analysis_prompt(self, task: str, context: Dict[str, Any]) -> str:
+        """
+        Build prompt for Stage 1: Data Analysis.
+
+        Creates a prompt that instructs AI to generate code for ANALYZING
+        complex data, not solving the task yet. The analysis helps AI
+        understand data type/structure before generating task code.
+
+        Args:
+            task: Main task description (for context)
+            context: Workflow context with data to analyze
+
+        Returns:
+            Complete prompt string for analysis code generation
+
+        Example output prompt:
+            "You are in STAGE 1: DATA ANALYSIS.
+
+            YOUR GOAL: Analyze the PDF in context to determine extraction method.
+            DO NOT extract text yet, just understand the data type.
+
+            TASK (for context): Extract text from PDF
+            CONTEXT: {pdf_data_b64: <628KB base64>}
+
+            Generate Python code to:
+            - Check if PDF is digital (has text layer) or scanned (images only)
+            - Count pages
+            - Recommend extraction method (PyMuPDF vs EasyOCR)
+
+            OUTPUT: JSON with analysis results"
+        """
+        context_summary = self.knowledge_manager.summarize_context(context)
+
+        prompt = f"""You are in STAGE 1: DATA ANALYSIS.
+
+YOUR GOAL: Generate Python code to ANALYZE complex data in the context.
+DO NOT solve the task yet, just understand the data type and structure.
+
+MAIN TASK (for context only):
+{task}
+
+AVAILABLE CONTEXT:
+{context_summary}
+
+ANALYSIS INSTRUCTIONS:
+1. Identify complex data fields (large base64 strings, files, etc.)
+2. Generate SHORT Python code (10-30 lines) to analyze them
+3. Focus on understanding data TYPE and STRUCTURE, not solving the task
+
+Examples of useful analysis:
+
+For PDFs (pdf_data_b64):
+- Check if digital (has text layer) or scanned (only images)
+- Count pages
+- Extract first 500 chars of text as preview
+- Recommend extraction method (PyMuPDF vs EasyOCR)
+
+For images (image_data):
+- Get dimensions (width x height)
+- Get format (JPEG, PNG, etc.)
+- Check file size
+- Detect if likely contains text
+
+For large text fields:
+- Get character count
+- Extract preview (first 500 chars)
+- Detect language if possible
+- Count lines/paragraphs
+
+OUTPUT FORMAT:
+Your code MUST end with:
+print(json.dumps({{
+    "status": "success",
+    "context_updates": {{
+        "analysis_field_name": {{...analysis results...}}
+    }},
+    "message": "Analysis complete"
+}}))
+
+IMPORTANT:
+- Keep code SHORT (10-30 lines max)
+- Focus on ONE main complex field
+- Don't try to solve the task, just ANALYZE
+- Use only pre-installed libraries (fitz, PIL, easyocr, base64, json)
+- Return structured JSON with clear, descriptive keys
+- Include recommendations for next stage (e.g., "use_easyocr": true)
+"""
+
+        return prompt
+
+    async def _generate_analysis_code(self, analysis_prompt: str) -> str:
+        """
+        Generate analysis code using OpenAI (simplified, no tool calling).
+
+        This generates SHORT Python code to analyze complex data.
+        Simpler than task generation: no tool calling, just direct code.
+
+        Args:
+            analysis_prompt: Complete prompt from _build_analysis_prompt()
+
+        Returns:
+            Clean Python code ready to execute
+
+        Raises:
+            ExecutorError: If code generation fails or syntax is invalid
+        """
+        try:
+            logger.debug("Calling OpenAI API for analysis code generation...")
+
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a Python code generator for data analysis.\n\n"
+                            "Generate SHORT code (10-30 lines) to analyze complex data.\n"
+                            "Focus on understanding data type and structure.\n"
+                            "Return results as JSON via print(json.dumps(...)).\n\n"
+                            "IMPORTANT:\n"
+                            "- Keep code simple and focused\n"
+                            "- Use only pre-installed libraries\n"
+                            "- Always return structured JSON output\n"
+                            "- Include error handling"
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": analysis_prompt
+                    }
+                ],
+                temperature=0.2,  # Low temperature for consistent analysis
+                max_tokens=800  # Short code
+            )
+
+            raw_code = response.choices[0].message.content
+
+            logger.debug(f"Raw analysis code received ({len(raw_code)} chars)")
+
+            # Clean code blocks (remove ```python markers)
+            analysis_code = self._clean_code_blocks(raw_code)
+
+            # Validate syntax
+            self._validate_syntax(analysis_code)
+
+            logger.info(f"✅ Analysis code generated successfully ({len(analysis_code)} chars)")
+
+            return analysis_code
+
+        except Exception as e:
+            logger.error(f"Failed to generate analysis code: {e}")
+            raise ExecutorError(
+                message=f"Analysis code generation failed: {e}",
+                generated_code=None
+            )
+
+    async def _run_analysis_stage(
+        self,
+        task: str,
+        context: Dict[str, Any],
+        timeout: int
+    ) -> Dict[str, Any]:
+        """
+        Run Stage 1: Complete data analysis workflow.
+
+        Coordinates analysis code generation and execution:
+        1. Build analysis prompt
+        2. Generate analysis code with OpenAI
+        3. Execute code in E2B sandbox
+        4. Return results + metadata
+
+        Args:
+            task: Main task description (for context)
+            context: Workflow context with complex data
+            timeout: Overall timeout (analysis gets max 30s or half)
+
+        Returns:
+            {
+                "analysis_data": {...},  # Results from analysis execution
+                "metadata": {            # Metadata for Chain-of-Work
+                    "stage": "analysis",
+                    "analysis_code": "...",
+                    "generation_time_ms": 1200,
+                    "execution_time_ms": 850,
+                    "timeout_used": 30
+                }
+            }
+
+        Raises:
+            ExecutorError: If analysis fails (caller should handle gracefully)
+        """
+        import time
+
+        logger.info("═══ STAGE 1: DATA ANALYSIS ═══")
+
+        try:
+            # Step 1: Build analysis prompt
+            analysis_prompt = self._build_analysis_prompt(task, context)
+            logger.debug(f"Analysis prompt built ({len(analysis_prompt)} chars)")
+
+            # Step 2: Generate analysis code
+            generation_start = time.time()
+            analysis_code = await self._generate_analysis_code(analysis_prompt)
+            generation_time_ms = int((time.time() - generation_start) * 1000)
+
+            logger.info(f"Analysis code generated in {generation_time_ms}ms")
+            logger.debug(f"Analysis code:\n{analysis_code}")
+
+            # Step 3: Execute analysis in E2B
+            # Use max 30s or half of total timeout (whichever is smaller)
+            analysis_timeout = min(timeout // 2, 30)
+
+            logger.info(f"Executing analysis code (timeout: {analysis_timeout}s)...")
+
+            execution_start = time.time()
+            analysis_result = await self.e2b_executor.execute(
+                code=analysis_code,
+                context=context,
+                timeout=analysis_timeout
+            )
+            execution_time_ms = int((time.time() - execution_start) * 1000)
+
+            logger.info(f"✅ Analysis executed successfully in {execution_time_ms}ms")
+            logger.debug(f"Analysis result keys: {list(analysis_result.keys())}")
+
+            # Step 4: Build metadata
+            metadata = {
+                "stage": "analysis",
+                "analysis_code": analysis_code,
+                "generation_time_ms": generation_time_ms,
+                "execution_time_ms": execution_time_ms,
+                "timeout_used": analysis_timeout,
+                "total_time_ms": generation_time_ms + execution_time_ms
+            }
+
+            return {
+                "analysis_data": analysis_result,
+                "metadata": metadata
+            }
+
+        except Exception as e:
+            logger.error(f"Stage 1 (analysis) failed: {e}")
+            # Re-raise so caller can handle
+            raise ExecutorError(
+                message=f"Data analysis stage failed: {e}",
+                generated_code=locals().get('analysis_code')
+            )
+
+    # ═══════════════════════════════════════════════════════════════════
+    # AI SELF-DETERMINATION METHODS (Alternative to heuristic approach)
+    # ═══════════════════════════════════════════════════════════════════
 
     def _detect_stage_from_code(self, code: str) -> str:
         """
@@ -918,9 +1522,7 @@ class AIExecutor(ExecutorStrategy):
         self,
         code: str,
         context: Dict[str, Any],
-        timeout: int,
-        workflow: Optional[Dict[str, Any]] = None,
-        node: Optional[Dict[str, Any]] = None
+        timeout: int
     ) -> Dict[str, Any]:
         raise NotImplementedError("AIExecutor is Phase 2 feature")
 
@@ -1034,9 +1636,7 @@ print(json.dumps(context, ensure_ascii=True))
         self,
         code: str,
         context: Dict[str, Any],
-        timeout: int,
-        workflow: Optional[Dict[str, Any]] = None,
-        node: Optional[Dict[str, Any]] = None
+        timeout: int
     ) -> Dict[str, Any]:
         """
         Execute code in E2B cloud sandbox with circuit breaker protection.
@@ -1045,8 +1645,6 @@ print(json.dumps(context, ensure_ascii=True))
             code: Python code to execute
             context: Current workflow context
             timeout: Execution timeout in seconds
-            workflow: Optional workflow definition (unused by E2BExecutor)
-            node: Optional node definition (unused by E2BExecutor)
 
         Returns:
             Updated context after execution
