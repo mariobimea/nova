@@ -28,7 +28,34 @@ class CodeValidatorAgent(BaseAgent):
         # Imports peligrosos que no permitimos
         self.dangerous_imports = {
             "os", "subprocess", "sys", "shutil", "pathlib",
-            "socket", "urllib", "requests", "http", "ftplib"
+            "socket", "urllib", "http", "ftplib"
+        }
+
+        # Python built-ins que están disponibles sin importar
+        # Esto evita falsos positivos al validar código generado
+        import builtins
+        self.python_builtins = set(dir(builtins))
+
+        # Módulos que están pre-instalados en E2B template y son seguros
+        # Estos NO deben reportarse como "imports peligrosos"
+        self.safe_modules = {
+            # E2B Template packages (ver e2b.Dockerfile)
+            "fitz",           # PyMuPDF (PDF processing)
+            "requests",       # HTTP/APIs
+            "pandas",         # Data analysis
+            "PIL",            # Pillow (Image processing)
+            "psycopg2",       # PostgreSQL
+            "dotenv",         # python-dotenv
+
+            # Python stdlib (siempre disponibles)
+            "json", "re", "base64", "csv", "email", "io",
+            "imaplib", "smtplib", "ssl", "datetime", "time",
+            "collections", "itertools", "functools", "math",
+            "hashlib", "hmac", "uuid", "tempfile", "mimetypes",
+
+            # Submódulos comunes
+            "email.mime", "email.header", "email.utils",
+            "pandas.io", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont"
         }
 
     async def execute(self, code: str, context: Dict) -> AgentResponse:
@@ -170,13 +197,14 @@ class CodeValidatorAgent(BaseAgent):
         DefineCollector().visit(tree)
 
         # Luego, buscar usos de variables no definidas
+        python_builtins = self.python_builtins  # Referencia local para closure
+
         class VariableVisitor(ast.NodeVisitor):
             def visit_Name(self, node):
                 if isinstance(node.ctx, ast.Load):
                     if node.id not in defined_vars:
-                        # Ignorar built-ins
-                        builtins = dir(__builtins__) if isinstance(__builtins__, dict) else dir(__builtins__)
-                        if node.id not in builtins:
+                        # Ignorar built-ins de Python (Exception, isinstance, str, print, etc.)
+                        if node.id not in python_builtins:
                             undefined.append((node.id, node.lineno))
                 self.generic_visit(node)
 
@@ -224,19 +252,39 @@ class CodeValidatorAgent(BaseAgent):
         return errors
 
     def _check_imports(self, tree: ast.AST) -> Set[str]:
-        """Detecta imports peligrosos"""
+        """
+        Detecta imports peligrosos.
+
+        Permite imports de:
+        - Python stdlib seguros (json, re, datetime, etc.)
+        - E2B template packages (fitz, pandas, PIL, etc.)
+
+        Bloquea imports peligrosos:
+        - os, subprocess, sys (acceso al sistema)
+        - socket, urllib, http (acceso a red sin control)
+        """
         dangerous = set()
         dangerous_imports = self.dangerous_imports  # Referencia local
+        safe_modules = self.safe_modules  # Referencia local
 
         class ImportVisitor(ast.NodeVisitor):
             def visit_Import(self, node):
                 for alias in node.names:
-                    if alias.name in dangerous_imports:
+                    # Extraer el módulo raíz (e.g., "email.mime.text" → "email")
+                    root_module = alias.name.split('.')[0]
+
+                    # Solo reportar si es peligroso Y NO está en safe_modules
+                    if root_module in dangerous_imports and root_module not in safe_modules:
                         dangerous.add(alias.name)
 
             def visit_ImportFrom(self, node):
-                if node.module and node.module in dangerous_imports:
-                    dangerous.add(node.module)
+                if node.module:
+                    # Extraer el módulo raíz
+                    root_module = node.module.split('.')[0]
+
+                    # Solo reportar si es peligroso Y NO está en safe_modules
+                    if root_module in dangerous_imports and root_module not in safe_modules:
+                        dangerous.add(node.module)
 
         ImportVisitor().visit(tree)
         return dangerous

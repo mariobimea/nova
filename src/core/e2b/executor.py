@@ -93,28 +93,28 @@ class E2BExecutor:
                 # Write code to temp file in sandbox
                 code_file = f"/tmp/nova_agent_code_{sandbox_id}.py"
 
-                # Upload code to sandbox
-                sandbox.filesystem.write(code_file, full_code)
+                # Upload code to sandbox using E2B SDK v2.x
+                sandbox.files.write(code_file, full_code)
                 logger.debug(f"Code uploaded to {code_file}")
 
-                # Execute code with timeout
+                # Execute code with timeout using E2B SDK v2.x
                 logger.debug(f"Executing code in sandbox {sandbox_id} (timeout: {timeout}s)")
 
-                process = sandbox.process.start_and_wait(
-                    f"python {code_file}",
+                execution = sandbox.commands.run(
+                    f"python3 {code_file}",
                     timeout=timeout
                 )
 
                 # Check exit code
-                if process.exit_code != 0:
-                    error_msg = f"E2B execution failed with exit code {process.exit_code}"
-                    if process.stderr:
-                        error_msg += f": {process.stderr}"
+                if execution.exit_code != 0:
+                    error_msg = f"E2B execution failed with exit code {execution.exit_code}"
+                    if execution.stderr:
+                        error_msg += f": {execution.stderr}"
                     logger.error(error_msg)
                     raise Exception(error_msg)
 
                 # Parse result from stdout
-                updated_context = self._parse_result(process.stdout, context)
+                updated_context = self._parse_result(execution.stdout, context)
 
                 logger.info(f"E2B execution successful (sandbox: {sandbox_id})")
                 return updated_context

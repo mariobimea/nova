@@ -390,35 +390,28 @@ class GraphEngine:
                     metadata["code_executed"] = code_or_prompt
 
                 # Extract decision result
-                # AI validator (in CachedExecutor) already validated decision field exists
-                # Try common decision field names
-                decision_result = None
-                decision_field = None
+                # The executor MUST set branch_decision in context
+                decision_result = context.get("branch_decision")
 
-                # Priority order: branch_decision > any boolean field
-                if "branch_decision" in context.get_all():
-                    decision_result = context.get("branch_decision")
-                    decision_field = "branch_decision"
-                else:
-                    # Search for ANY boolean field (AI validator ensures one exists)
-                    for key, value in context.get_all().items():
-                        if isinstance(value, bool) and not key.startswith('_'):
-                            decision_result = value
-                            decision_field = key
-                            logger.info(f"Using '{key}' as decision field (no 'branch_decision' found)")
-                            break
-
-                # Fallback: if no boolean found, default to False (fail-safe)
                 if decision_result is None:
-                    logger.warning(
-                        f"DecisionNode {node.id} did not set any boolean field. "
-                        f"Defaulting to False. Context keys: {list(context.get_all().keys())}"
+                    # NO FALLBACK: Si el executor no agregó branch_decision, es un error
+                    error_msg = (
+                        f"DecisionNode {node.id} did not set 'branch_decision' in context. "
+                        f"Available context keys: {list(context.get_all().keys())}"
                     )
-                    decision_result = False
-                    decision_field = "default_false"
+                    logger.error(error_msg)
+                    raise GraphExecutionError(error_msg)
+
+                # Validar que es booleano
+                if not isinstance(decision_result, bool):
+                    error_msg = (
+                        f"DecisionNode {node.id} set 'branch_decision' to non-boolean value: "
+                        f"{type(decision_result).__name__} = {decision_result}"
+                    )
+                    logger.error(error_msg)
+                    raise GraphExecutionError(error_msg)
 
                 metadata["decision_result"] = "true" if decision_result else "false"
-                metadata["decision_field_used"] = decision_field  # For debugging
 
             else:
                 raise GraphExecutionError(f"Unknown node type: {type(node)}")
