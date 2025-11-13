@@ -38,6 +38,17 @@ setup_logging(
 
 logger = logging.getLogger(__name__)
 
+# Log startup to help debug Railway deployment issues
+logger.info("=" * 60)
+logger.info("NOVA API Starting...")
+logger.info(f"Python version: {os.sys.version}")
+logger.info(f"PORT env var: {os.getenv('PORT', 'not set')}")
+logger.info(f"DATABASE_URL: {'set' if os.getenv('DATABASE_URL') else 'not set'}")
+logger.info(f"REDIS_URL: {'set' if os.getenv('REDIS_URL') else 'not set'}")
+logger.info(f"E2B_API_KEY: {'set' if os.getenv('E2B_API_KEY') else 'not set'}")
+logger.info(f"OPENAI_API_KEY: {'set' if os.getenv('OPENAI_API_KEY') else 'not set'}")
+logger.info("=" * 60)
+
 # ============================================================================
 # FASTAPI APP CONFIGURATION
 # ============================================================================
