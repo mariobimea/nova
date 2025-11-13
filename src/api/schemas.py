@@ -110,6 +110,32 @@ class ExecutionListResponse(BaseModel):
     total: int
 
 
+class ChainOfWorkStepSchema(BaseModel):
+    """Schema for chain of work step (granular agent execution)"""
+    id: int
+    chain_of_work_id: int
+    step_number: int
+    step_name: str
+    agent_name: str
+    attempt_number: int
+    input_data: Optional[Dict[str, Any]]
+    output_data: Optional[Dict[str, Any]]
+    generated_code: Optional[str]
+    sandbox_id: Optional[str]
+    model_used: Optional[str]
+    tokens_input: Optional[int]
+    tokens_output: Optional[int]
+    cost_usd: Optional[float]
+    tool_calls: Optional[List[Dict[str, Any]]]
+    status: str
+    error_message: Optional[str]
+    execution_time_ms: float
+    timestamp: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class ChainOfWorkEntry(BaseModel):
     """Schema for chain of work entry"""
     id: int
@@ -126,6 +152,7 @@ class ChainOfWorkEntry(BaseModel):
     path_taken: Optional[str]
     ai_metadata: Optional[Dict[str, Any]]  # AI generation metadata (model, tokens, cost, etc.)
     timestamp: datetime
+    steps: List[ChainOfWorkStepSchema] = []  # Granular execution steps
 
     class Config:
         from_attributes = True

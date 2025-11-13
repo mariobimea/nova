@@ -6,7 +6,7 @@ REST API endpoints for NOVA
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 import os
 import logging
@@ -1008,16 +1008,18 @@ def get_execution(execution_id: int, db: Session = Depends(get_db)):
     """
 )
 def get_chain_of_work(execution_id: int, db: Session = Depends(get_db)):
-    """Get Chain of Work (execution trace) for an execution"""
+    """Get Chain of Work (execution trace) for an execution with granular steps"""
 
     # Check if execution exists
     execution = db.query(Execution).filter(Execution.id == execution_id).first()
     if not execution:
         raise HTTPException(status_code=404, detail=f"Execution {execution_id} not found")
 
-    # Get chain of work entries
+    # Get chain of work entries with steps (eager loading to avoid N+1 queries)
     entries = db.query(ChainOfWork).filter(
         ChainOfWork.execution_id == execution_id
+    ).options(
+        joinedload(ChainOfWork.steps)
     ).order_by(ChainOfWork.id).all()
 
     return {
