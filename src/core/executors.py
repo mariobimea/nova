@@ -140,8 +140,12 @@ class CachedExecutor(ExecutorStrategy):
         openai_client = AsyncOpenAI(api_key=api_key)
 
         # Initialize E2B executor for agents
-        # Note: Agent E2BExecutor doesn't support custom templates (uses default e2b-code-interpreter)
-        e2b_executor = AgentE2BExecutor(api_key=os.getenv("E2B_API_KEY"))
+        # Uses same SDK and custom template as StaticExecutor for consistency
+        template_id = os.getenv("E2B_TEMPLATE_ID")
+        e2b_executor = AgentE2BExecutor(
+            api_key=os.getenv("E2B_API_KEY"),
+            template=template_id
+        )
 
         # Initialize all agents
         input_analyzer = InputAnalyzerAgent(openai_client)

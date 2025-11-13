@@ -1,0 +1,605 @@
+# CachedExecutor: Especificación Funcional
+
+Especificación completa del ejecutor con generación de código AI.
+
+---
+
+## 1. Overview
+
+**CachedExecutor** genera código Python dinámicamente usando AI (OpenAI GPT-5) en lugar de ejecutar código hardcodeado.
+
+**Flow básico:**
+```
+Input (prompt) → AI genera código → Ejecuta en E2B → Valida output → Retorna resultado
+```
+
+**Características:**
+- Self-determination: AI decide si necesita análisis previo
+- Retry inteligente: 3 intentos con feedback de errores
+- Validación triple: contexto, output, serialización
+- Trazabilidad completa: código generado + metadata en Chain of Work
+
+---
+
+## 2. Input
+
+### Parámetros
+
+```python
+await executor.execute(
+    code="Extract total amount from invoice PDF",  # ← Prompt (lenguaje natural)
+    context={                                      # ← Datos disponibles
+        "pdf_data_b64": "JVBERi0xLjQK...",
+        "client_name": "Acme Corp"
+    },
+    timeout=30,                                    # ← Timeout E2B
+    workflow={"model": "gpt-4o-mini"},            # ← Config workflow (opcional)
+    node={"id": "extract", "model": None}         # ← Config nodo (opcional)
+)
+```
+
+### Resolución de modelo
+
+**Prioridad:**
+1. `node.model` (config específica del nodo)
+2. `workflow.model` (config global del workflow)
+3. `default_model` (definido en `__init__`, default: `gpt-5`)
+
+---
+
+## 3. AI Self-Determination (Two-Stage)
+
+### Decision: ¿Análisis o Task directo?
+
+El AI decide automáticamente si necesita analizar data compleja antes de resolver la tarea.
+
+**Stage 1 - ANALYSIS (opcional):**
+- Se ejecuta si hay data compleja 
+- Objetivo: entender estructura/contenido antes de procesar
+- Output: `_data_analysis` (insights para Stage 2)
+
+**Stage 2 - TASK (obligatorio):**
+- Se ejecuta siempre (directamente o después de análisis)
+- Usa insights de `_data_analysis` si están disponibles
+- Output: resultado final de la tarea
+
+### Prompts
+
+#### System Prompt - Stage 1 (first attempt)
+
+```
+You are NOVA's code generation system.
+
+Your job: Generate Python code to solve the user's task.
+
+OPTIONAL TWO-STAGE APPROACH:
+
+If the context contains complex data that, you need to UNDERSTAND before solving the task:
+
+1. First, generate ANALYSIS code marked with:
+   # STAGE: ANALYSIS
+
+AVAILABLE TOOLS:
+You can call search_documentation(library, query) at ANY point to get API documentation.
+
+   This code should:
+   - Analyze the data structure/content/format
+   - Extract metadata (type, size, properties)
+   - Identify key characteristics needed to solve the task
+   - Return insights as a dict with clear keys
+
+If the context is simple/clear (just strings, numbers, small data),
+skip analysis and go directly to:
+
+# STAGE: TASK
+
+Your task-solving code here.
+
+AVAILABLE TOOLS:
+You can call search_documentation(library, query) at ANY point to get API documentation.
+
+CONTEXT PROVIDED:
+{context_summary}
+
+USER TASK:
+{task}
+
+REQUIREMENTS:
+- Mark your code with the appropriate stage comment
+- Return results by modifying the 'context' dict
+- Handle errors gracefully
+- Use clear variable names
+
+Generate the appropriate Python code now.
+```
+
+#### System Prompt - Stage 2 (after analysis)
+
+```
+You previously analyzed the data. The analysis results are in context['_data_analysis'].
+
+Now generate the TASK code marked with:
+# STAGE: TASK
+
+Use the analysis insights to solve the task effectively.
+
+[Same AVAILABLE TOOLS, CONTEXT, REQUIREMENTS as Stage 1]
+```
+
+### Stage Detection
+
+El sistema detecta el stage por marcador en el código:
+
+```python
+# STAGE: ANALYSIS  → Stage 1
+# STAGE: TASK      → Stage 2
+```
+
+**Si no hay marcador:** Asume TASK (default).
+
+### Ejemplo de flujo
+
+**Input:**
+```python
+task = "Extract total amount from invoice PDF"
+context = {"pdf_data_b64": "JVBERi0xLjQK..."}
+```
+
+**Stage 1 - AI genera:**
+```python
+# STAGE: ANALYSIS
+import base64
+import fitz  # PyMuPDF
+
+pdf_bytes = base64.b64decode(context['pdf_data_b64'])
+doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+result = {
+    "type": "pdf",
+    "pages": len(doc),
+    "has_text_layer": bool(doc[0].get_text().strip()),
+    "file_size_kb": len(pdf_bytes) // 1024
+}
+```
+
+**Sistema ejecuta → guarda en `context['_data_analysis']`**
+
+**Stage 2 - AI genera:**
+```python
+# STAGE: TASK
+import base64
+import fitz
+import re
+
+pdf_bytes = base64.b64decode(context['pdf_data_b64'])
+doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+# Extract text from all pages
+text = ""
+for page in doc:
+    text += page.get_text()
+
+# Find total amount pattern
+match = re.search(r'Total[:\s]+\$?([\d,]+\.?\d*)', text, re.IGNORECASE)
+
+context['total_amount'] = match.group(1) if match else None
+context['extraction_status'] = 'success' if match else 'not_found'
+```
+
+---
+
+## 4. Execution
+
+### Context Injection
+
+El código generado recibe el contexto como JSON:
+
+```python
+import json
+
+# Injected context (workflow state)
+context = json.loads('{"pdf_data_b64": "...", "client_name": "Acme Corp"}')
+
+# User code (generated by AI)
+{generated_code}
+
+# Output updated context
+print(json.dumps(context, ensure_ascii=True))
+```
+
+### E2B Execution
+
+- Template: `nova-workflow-fresh` (pre-instalado: PyMuPDF, pandas, requests, PIL)
+- Timeout: configurable (default: 30s para task, 15s para analysis)
+- Output: última línea de stdout como JSON
+
+---
+
+## 5. Validation Pipeline
+
+### 5.1 Pre-execution: Context Access Validation
+
+**Objetivo:** Detectar código que usa variables no definidas.
+
+**Ejemplo de error detectado:**
+```python
+# ❌ MAL - usa variables no definidas
+send_email(email_user, password)
+
+# ✅ BIEN - extrae del contexto
+email_user = context['email_user']
+password = context['email_password']
+send_email(email_user, password)
+```
+
+**Si falla:** Retry con feedback específico.
+
+### 5.2 Post-execution: AI Output Validation
+
+**Objetivo:** Validar semánticamente que el output es correcto.
+
+**Valida:**
+- ¿Se completó la tarea?
+- ¿Los outputs son significativos (no vacíos/errores disfrazados)?
+
+**Modelo:** `gpt-5-mini` (rápido, barato)
+
+**Ejemplo de validación:**
+```python
+# Context before
+{"pdf_data_b64": "..."}
+
+# Context after
+{"total_amount": "1234.56", "extraction_status": "success"}
+
+# AI validator → {"valid": true, "reason": "Total amount extracted correctly"}
+```
+
+**Si falla:** Retry con feedback específico.
+
+### 5.3 Post-execution: Serialization Validation
+
+**Objetivo:** Detectar objetos no-JSON-serializables.
+
+**Ejemplo de error detectado:**
+```python
+# ❌ MAL - guarda objeto email.Message
+context['email_obj'] = msg  # msg es email.Message
+
+# ✅ BIEN - extrae campos como strings
+context['email_from'] = msg.get('From')
+context['email_subject'] = msg.get('Subject')
+```
+
+**Si falla:** Retry con feedback específico listando las claves problemáticas.
+
+---
+
+## 6. Error Handling & Retry
+
+### Retry Logic
+
+**Máximo:** 3 intentos
+
+**Flow:**
+```
+Attempt 1 → Error → Attempt 2 (con feedback del error 1) → Error → Attempt 3 (con feedback de errores 1 y 2)
+```
+
+### Error Feedback
+
+El AI recibe el historial completo de errores:
+
+```
+Attempt 1: FAILED
+Error: NameError: name 'email_user' is not defined
+Code preview: send_email(email_user, password)...
+
+Attempt 2: FAILED
+Error: AttributeError: 'NoneType' object has no attribute 'get'
+Code preview: msg = context.get('email')...
+```
+
+### Error Classification
+
+**CodeExecutionError** → Retry (error de código del AI)
+- SyntaxError, NameError, TypeError, etc.
+- Output validation failed
+- Context access validation failed
+
+**E2BTimeoutError** → Retry (timeout de ejecución)
+
+**E2BSandboxError** → Retry (error del sandbox)
+
+**E2BConnectionError** → No retry (circuit breaker)
+
+---
+
+## 7. Output
+
+### Context Updates
+
+El CachedExecutor retorna el contexto actualizado:
+
+```python
+{
+    # Datos originales
+    "pdf_data_b64": "...",
+    "client_name": "Acme Corp",
+
+    # Nuevos datos (agregados por el código)
+    "total_amount": "1234.56",
+    "extraction_status": "success",
+
+    # Metadata de AI
+    "_ai_metadata": {
+        "model": "gpt-4o-mini",
+        "prompt_task": "Extract total amount from invoice PDF",
+        "generated_code": "import base64\nimport fitz\n...",
+        "code_length": 450,
+        "tokens_input_estimated": 7000,
+        "tokens_output_estimated": 450,
+        "cost_usd_estimated": 0.0012,
+        "generation_time_ms": 1800,
+        "execution_time_ms": 1200,
+        "total_time_ms": 3000,
+        "attempts": 1,
+        "cache_hit": false,
+
+        # Tool calling
+        "tool_calling_enabled": true,
+        "tool_calls": [
+            {"function": "search_documentation", "arguments": {"query": "pymupdf extract text"}}
+        ],
+        "total_tool_calls": 1,
+
+        # Two-stage metadata
+        "two_stage_enabled": true,
+        "ai_self_determined": true,
+        "stages_used": 2,
+        "analysis_metadata": {
+            "analysis_code": "# STAGE: ANALYSIS\n...",
+            "analysis_result": {"type": "pdf", "pages": 1, ...},
+            "generation_time_ms": 1200,
+            "execution_time_ms": 800
+        }
+    }
+}
+```
+
+### Chain of Work Persistence
+
+**Campos guardados:**
+
+```python
+ChainOfWork(
+    execution_id=123,
+    node_id="extract",
+    node_type="ActionNode",
+    code_executed="import base64\nimport fitz\n...",  # ← Código GENERADO (no el prompt)
+    input_context={"pdf_data_b64": "..."},
+    output_result={"total_amount": "1234.56", ...},
+    execution_time=3.0,
+    status="success",
+    error_message=None,
+    ai_metadata={...},  # ← Metadata completa de AI
+    timestamp=datetime.utcnow()
+)
+```
+
+**Si falla después de 3 intentos:**
+
+```python
+ChainOfWork(
+    status="failed",
+    error_message="Failed after 3 attempts: NameError: ...",
+    code_executed="...",  # ← Último código generado
+    ai_metadata={
+        "attempts": 3,
+        "all_attempts": [
+            {"attempt": 1, "error": "...", "code": "..."},
+            {"attempt": 2, "error": "...", "code": "..."},
+            {"attempt": 3, "error": "...", "code": "..."}
+        ],
+        "final_error": "...",
+        "status": "failed_after_retries"
+    }
+)
+```
+
+---
+
+## 8. Ejemplos Completos
+
+### Example 1: Task Simple (sin análisis)
+
+**Input:**
+```python
+task = "Calculate discount (10% if total > 1000)"
+context = {"total": 1500}
+```
+
+**AI genera directamente (Stage TASK):**
+```python
+# STAGE: TASK
+total = context['total']
+discount_rate = 0.10 if total > 1000 else 0.0
+context['discount'] = total * discount_rate
+context['final_total'] = total - context['discount']
+```
+
+**Output:**
+```python
+{
+    "total": 1500,
+    "discount": 150.0,
+    "final_total": 1350.0,
+    "_ai_metadata": {
+        "stages_used": 1,  # Solo TASK, sin análisis
+        "analysis_metadata": None
+    }
+}
+```
+
+### Example 2: Task Compleja (con análisis)
+
+**Input:**
+```python
+task = "Extract invoice total from PDF"
+context = {"pdf_data_b64": "JVBERi0xLjQK..."}
+```
+
+**Stage 1 - ANALYSIS:**
+```python
+# STAGE: ANALYSIS
+import base64
+import fitz
+pdf_bytes = base64.b64decode(context['pdf_data_b64'])
+doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+result = {"type": "pdf", "pages": len(doc), "has_text_layer": bool(doc[0].get_text())}
+```
+
+**Sistema ejecuta → `context['_data_analysis'] = {"type": "pdf", "pages": 1, "has_text_layer": true}`**
+
+**Stage 2 - TASK (con insights del análisis):**
+```python
+# STAGE: TASK
+import base64, fitz, re
+pdf_bytes = base64.b64decode(context['pdf_data_b64'])
+doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+text = "".join(page.get_text() for page in doc)
+match = re.search(r'Total[:\s]+\$?([\d,]+\.?\d*)', text, re.IGNORECASE)
+context['total'] = match.group(1) if match else None
+```
+
+**Output:**
+```python
+{
+    "pdf_data_b64": "...",
+    "total": "1234.56",
+    "_ai_metadata": {
+        "stages_used": 2,  # ANALYSIS + TASK
+        "analysis_metadata": {
+            "analysis_result": {"type": "pdf", "pages": 1, "has_text_layer": true},
+            "generation_time_ms": 1200,
+            "execution_time_ms": 800
+        }
+    }
+}
+```
+
+### Example 3: Task con Errores (retry flow)
+
+**Input:**
+```python
+task = "Send email notification"
+context = {"email_user": "test@example.com", "email_password": "secret"}
+```
+
+**Attempt 1 - FAIL:**
+```python
+# AI genera código incorrecto
+send_email(email_user, password)  # ❌ Variables no definidas
+```
+**Error:** `NameError: name 'email_user' is not defined`
+
+**Attempt 2 - FAIL:**
+```python
+# AI corrige pero usa mal el contexto
+email_user = context.get('user')  # ❌ Campo incorrecto
+send_email(email_user, context['email_password'])
+```
+**Error:** `AI Validation Failed: email_user is None, cannot send email`
+
+**Attempt 3 - SUCCESS:**
+```python
+# AI corrige basándose en errores previos
+email_user = context['email_user']  # ✅ Correcto
+password = context['email_password']
+send_email(email_user, password)
+context['email_sent'] = True
+```
+
+**Output:**
+```python
+{
+    "email_user": "test@example.com",
+    "email_password": "secret",
+    "email_sent": true,
+    "_ai_metadata": {
+        "attempts": 3,  # ← 3 intentos hasta lograrlo
+        "cost_usd_estimated": 0.0036  # ← 3x el costo normal
+    }
+}
+```
+
+---
+
+## 9. Pricing
+
+**Modelo:** `gpt-4o-mini` (default)
+
+**Costos (OpenAI):**
+- Input: $0.25 / 1M tokens
+- Output: $2.00 / 1M tokens
+
+**Estimación por ejecución:**
+- Simple task: ~$0.002 - $0.005
+- Complex task (2-stage): ~$0.004 - $0.008
+- Task con 3 retries: ~$0.006 - $0.015
+
+**Costo mensual estimado (1000 workflows/día):**
+- ~$150 - $300/mes
+
+---
+
+## 10. Configuration
+
+### Environment Variables
+
+```bash
+# Required
+OPENAI_API_KEY=sk-...          # OpenAI API key
+E2B_API_KEY=e2b_...            # E2B API key
+E2B_TEMPLATE_ID=wzqi57u2...    # Template con PyMuPDF, pandas, etc.
+
+# Optional
+DEFAULT_MODEL=gpt-4o-mini      # Default model (can override in workflow/node)
+```
+
+### Workflow-level Config
+
+```json
+{
+  "model": "gpt-4o-mini",
+  "nodes": [...]
+}
+```
+
+### Node-level Config
+
+```json
+{
+  "id": "extract",
+  "type": "ActionNode",
+  "executor": "cached",
+  "prompt": "Extract total from invoice",
+  "model": "gpt-4o",  // Override para este nodo específico
+  "timeout": 30
+}
+```
+
+---
+
+## 11. Limitations
+
+**Phase 1 (MVP):**
+- ❌ No cache (genera código fresco cada vez)
+- ❌ No code review (no valida calidad del código)
+- ❌ No cost limits (puede gastar mucho en retries)
+
+**Phase 2 (Future):**
+- ✅ Hash-based cache (reutiliza código para prompts idénticos)
+- ✅ Semantic cache (reutiliza código para prompts similares)
+- ✅ Cost tracking & limits
+- ✅ Code quality scoring

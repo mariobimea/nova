@@ -39,18 +39,25 @@ class KnowledgeManager:
         self._cache: Dict[str, str] = {}  # In-memory cache for loaded files
         self.use_vector_store = use_vector_store
 
-        # Initialize vector store if enabled
+        # Initialize RAG client (remote vector store service) if enabled
         if use_vector_store:
             try:
-                from .vector_store import VectorStore
-                self.vector_store = VectorStore()
-                logger.info("KnowledgeManager initialized with vector store")
+                from ..rag_client import get_rag_client
+                self.rag_client = get_rag_client()
+
+                # Check if RAG service is available
+                if self.rag_client.health_check():
+                    logger.info("KnowledgeManager initialized with RAG client (remote vector store)")
+                else:
+                    logger.warning("RAG service not ready yet. Falling back to file loading.")
+                    self.use_vector_store = False
+                    self.rag_client = None
             except Exception as e:
-                logger.warning(f"Failed to initialize vector store: {e}. Falling back to file loading.")
+                logger.warning(f"Failed to initialize RAG client: {e}. Falling back to file loading.")
                 self.use_vector_store = False
-                self.vector_store = None
+                self.rag_client = None
         else:
-            self.vector_store = None
+            self.rag_client = None
 
     def load_file(self, relative_path: str) -> str:
         """
@@ -337,26 +344,30 @@ class KnowledgeManager:
             ...     integrations=["pymupdf"]
             ... )
         """
-        if not self.use_vector_store or self.vector_store is None:
-            logger.warning("Vector store not available, returning empty docs")
+        if not self.use_vector_store or self.rag_client is None:
+            logger.warning("RAG client not available, returning empty docs")
             return ""
 
         all_docs = []
 
-        # Query for each integration
+        # Query for each integration via RAG service
         for integration in integrations:
             logger.debug(f"Retrieving docs for integration: {integration}")
 
-            # Query vector store
-            results = self.vector_store.query(
-                query_text=f"{integration} {task}",
-                top_k=top_k_per_integration,
-                filter_source=integration
-            )
+            try:
+                # Query RAG service
+                results = self.rag_client.query(
+                    query=f"{integration} {task}",
+                    top_k=top_k_per_integration,
+                    filters={"source": integration}
+                )
 
-            if results:
-                all_docs.extend(results)
-                logger.debug(f"Retrieved {len(results)} chunks for {integration}")
+                if results:
+                    all_docs.extend(results)
+                    logger.debug(f"Retrieved {len(results)} chunks for {integration}")
+            except Exception as e:
+                logger.error(f"Failed to query RAG service for {integration}: {e}")
+                # Continue with other integrations
 
         if not all_docs:
             logger.warning(f"No docs found for integrations: {integrations}")
@@ -451,22 +462,25 @@ class KnowledgeManager:
             sections.append("## INTEGRATION DOCUMENTATION\n\n")
             sections.append(f"Relevant integrations detected: {', '.join(integrations)}\n\n")
 
-            # Use vector store retrieval if available, otherwise fall back to file loading
-            if self.use_vector_store and self.vector_store is not None:
-                # NEW: Retrieve docs from vector store
-                logger.info(f"Retrieving docs for integrations: {integrations}")
+            # Use RAG service retrieval if available, otherwise fall back to file loading
+            if self.use_vector_store and self.rag_client is not None:
+                # NEW: Retrieve docs from RAG service
+                logger.info(f"Retrieving docs from RAG service for integrations: {integrations}")
 
                 # Track retrieval stats
                 docs_count = 0
                 for integration in integrations:
-                    results = self.vector_store.query(
-                        query_text=f"{integration} {task}",
-                        top_k=3,  # 3 most relevant chunks per integration
-                        filter_source=integration
-                    )
-                    docs_count += len(results)
+                    try:
+                        results = self.rag_client.query(
+                            query=f"{integration} {task}",
+                            top_k=3,  # 3 most relevant chunks per integration
+                            filters={"source": integration}
+                        )
+                        docs_count += len(results)
+                    except Exception as e:
+                        logger.error(f"RAG query failed for {integration}: {e}")
 
-                metadata["retrieval_method"] = "vector_store"
+                metadata["retrieval_method"] = "rag_service"
                 metadata["docs_retrieved_count"] = docs_count
 
                 retrieved_docs = self.retrieve_docs(
@@ -478,7 +492,7 @@ class KnowledgeManager:
                 if retrieved_docs:
                     sections.append(retrieved_docs)
                 else:
-                    sections.append("(No relevant documentation found in vector store)\n\n")
+                    sections.append("(No relevant documentation found in RAG service)\n\n")
 
             else:
                 # FALLBACK: Load from .md files (old method)

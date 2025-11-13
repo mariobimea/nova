@@ -1,11 +1,10 @@
 # Railway Procfile for NOVA
 # Defines processes for Railway deployment
 
-# Release Command: Pre-deployment initialization
+# Release Command: Database migrations only
 # - Runs BEFORE web/worker start on each deploy
-# - Loads documentation into ChromaDB vector store
-# - Required for AI code generation with RAG
-release: bash scripts/init_railway.sh
+# - No vector store loading (handled by nova-rag service)
+release: bash scripts/migrate.sh
 
 # Web Service: FastAPI application
 # - Serves REST API

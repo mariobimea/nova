@@ -9,12 +9,20 @@
       "label": "Start"
     },
     {
-      "id": "read_email_and_extract_attachments",
+      "id": "read_email",
       "type": "action",
-      "label": "Read email and extract attachments",
+      "label": "Read email and extract metadata",
       "executor": "cached",
-      "prompt": "Read email and extract attachments",
-      "timeout": 60
+      "prompt": "Read email and extract metadata",
+      "timeout": 30
+    },
+    {
+      "id": "extract_pdf",
+      "type": "action",
+      "label": "Extract PDF attachment",
+      "executor": "cached",
+      "prompt": "Extract PDF attachment",
+      "timeout": 30
     },
     {
       "id": "has_pdf_decision",
@@ -81,10 +89,14 @@
   "edges": [
     {
       "from": "start",
-      "to": "read_email_and_extract_attachments"
+      "to": "read_email"
     },
     {
-      "from": "read_email_and_extract_attachments",
+      "from": "read_email",
+      "to": "extract_pdf"
+    },
+    {
+      "from": "extract_pdf",
       "to": "has_pdf_decision"
     },
     {

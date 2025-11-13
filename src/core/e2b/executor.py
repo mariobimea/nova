@@ -3,35 +3,48 @@ E2B Executor - Wrapper para ejecutar código Python en sandbox.
 
 Responsabilidad:
     Ejecutar código Python de manera segura y retornar contexto actualizado.
+
+Uses the same E2B SDK and custom template as StaticExecutor for consistency.
 """
 
 from typing import Dict, Optional
 import json
 import logging
-from e2b_code_interpreter import AsyncSandbox
+import os
 
 logger = logging.getLogger(__name__)
 
 
 class E2BExecutor:
-    """Ejecuta código Python en E2B sandbox"""
+    """
+    Ejecuta código Python en E2B sandbox usando custom template.
 
-    def __init__(self, api_key: Optional[str] = None):
+    Uses the same E2B SDK and template as StaticExecutor to ensure:
+    - Pre-installed packages (PyMuPDF, pandas, pillow, etc.)
+    - Faster cold starts
+    - Consistent execution environment
+    """
+
+    def __init__(self, api_key: Optional[str] = None, template: Optional[str] = None):
         """
+        Initialize E2BExecutor with custom template support.
+
         Args:
-            api_key: DEPRECATED - AsyncSandbox reads E2B_API_KEY from environment automatically.
-                     This parameter is kept for backwards compatibility but is not used.
-
-        Note:
-            Ensure E2B_API_KEY environment variable is set in your deployment environment.
+            api_key: E2B API key (or set E2B_API_KEY env var)
+            template: E2B template ID (or set E2B_TEMPLATE_ID env var)
         """
-        # Note: api_key parameter is deprecated and not used
-        # AsyncSandbox reads from E2B_API_KEY environment variable automatically
-        if api_key:
-            logger.warning(
-                "api_key parameter is deprecated. AsyncSandbox reads E2B_API_KEY from environment. "
-                "This parameter will be removed in a future version."
+        self.api_key = api_key or os.getenv("E2B_API_KEY")
+        self.template = template or os.getenv("E2B_TEMPLATE_ID")
+
+        if not self.api_key:
+            raise ValueError(
+                "E2B API key required. Set E2B_API_KEY environment variable or pass api_key parameter."
             )
+
+        if self.template:
+            logger.info(f"E2BExecutor (agents) initialized with custom template: {self.template}")
+        else:
+            logger.info("E2BExecutor (agents) initialized with base template")
 
     async def execute_code(
         self,
@@ -45,7 +58,7 @@ class E2BExecutor:
         Args:
             code: Código Python a ejecutar
             context: Contexto disponible para el código
-            timeout: Timeout en segundos
+            timeout: Timeout en segundos (para ejecución de código)
 
         Returns:
             Context actualizado con los resultados
@@ -53,29 +66,66 @@ class E2BExecutor:
         Raises:
             Exception: Si la ejecución falla
         """
+        from e2b import Sandbox
+
         try:
             # Inyectar contexto en el código
             full_code = self._inject_context(code, context)
 
             logger.info(f"Ejecutando código en E2B (timeout: {timeout}s)...")
 
-            # Ejecutar en E2B
-            # Note: AsyncSandbox reads E2B_API_KEY from environment automatically
-            async with AsyncSandbox() as sandbox:
-                # Timeout goes in run_code(), not in AsyncSandbox constructor
-                execution = await sandbox.run_code(full_code, timeout=float(timeout))
+            # Create kwargs for sandbox
+            create_kwargs = {
+                "api_key": self.api_key,
+                "timeout": 120  # Timeout for sandbox creation (2 minutes)
+            }
+            if self.template:
+                create_kwargs["template"] = self.template
 
-                # Revisar errores
-                if execution.error:
-                    error_msg = f"E2B execution error: {execution.error.name}: {execution.error.value}"
+            logger.debug("Creating E2B sandbox (agents)...")
+
+            # Create sandbox
+            sandbox = Sandbox.create(**create_kwargs)
+            sandbox_id = sandbox.id if hasattr(sandbox, 'id') else "unknown"
+            logger.debug(f"E2B sandbox created: {sandbox_id}")
+
+            try:
+                # Write code to temp file in sandbox
+                code_file = f"/tmp/nova_agent_code_{sandbox_id}.py"
+
+                # Upload code to sandbox
+                sandbox.filesystem.write(code_file, full_code)
+                logger.debug(f"Code uploaded to {code_file}")
+
+                # Execute code with timeout
+                logger.debug(f"Executing code in sandbox {sandbox_id} (timeout: {timeout}s)")
+
+                process = sandbox.process.start_and_wait(
+                    f"python {code_file}",
+                    timeout=timeout
+                )
+
+                # Check exit code
+                if process.exit_code != 0:
+                    error_msg = f"E2B execution failed with exit code {process.exit_code}"
+                    if process.stderr:
+                        error_msg += f": {process.stderr}"
                     logger.error(error_msg)
                     raise Exception(error_msg)
 
-                # Parsear resultado
-                updated_context = self._parse_result(execution, context)
+                # Parse result from stdout
+                updated_context = self._parse_result(process.stdout, context)
 
-                logger.info(f"E2B execution successful")
+                logger.info(f"E2B execution successful (sandbox: {sandbox_id})")
                 return updated_context
+
+            finally:
+                # Always kill sandbox to avoid charges
+                try:
+                    sandbox.kill()
+                    logger.debug(f"E2B sandbox killed: {sandbox_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to kill sandbox {sandbox_id}: {e}")
 
         except Exception as e:
             logger.error(f"Error en E2BExecutor: {str(e)}")
@@ -106,16 +156,18 @@ context = json.loads('''{context_json}''')
 print("__NOVA_RESULT__:", json.dumps(context, default=str))
 """
 
-    def _parse_result(self, execution, original_context: Dict) -> Dict:
+    def _parse_result(self, stdout: str, original_context: Dict) -> Dict:
         """
         Parsea el resultado de E2B y retorna el contexto actualizado.
 
         Busca la línea "__NOVA_RESULT__: {...}" en stdout.
         """
-        stdout = execution.logs.stdout
+        if not stdout:
+            logger.warning("No stdout from E2B execution, retornando context original")
+            return original_context
 
-        # Buscar línea con el resultado
-        for line in stdout:
+        # stdout es un string, no una lista de líneas
+        for line in stdout.split('\n'):
             if "__NOVA_RESULT__:" in line:
                 try:
                     json_str = line.split("__NOVA_RESULT__:")[1].strip()
