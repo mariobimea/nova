@@ -180,6 +180,18 @@ class KnowledgeManager:
 
         return sorted(list(detected_with_deps))  # Sort for consistency
 
+    def create_context_summary(self, context: Dict) -> str:
+        """
+        Alias for summarize_context() for backward compatibility.
+
+        Args:
+            context: Context dictionary
+
+        Returns:
+            Formatted context summary
+        """
+        return self.summarize_context(context)
+
     def summarize_context(self, context: Dict) -> str:
         """
         Format context dictionary into human-readable summary for AI.

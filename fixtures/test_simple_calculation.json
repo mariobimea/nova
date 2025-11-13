@@ -1,0 +1,69 @@
+{
+  "id": "test-simple-calc",
+  "name": "Simple Calculation Test",
+  "description": "Test workflow for local execution - calculates expenses",
+  "version": "1.0",
+  "model": "gpt-4o-mini",
+
+  "initial_context": {
+    "expenses": [
+      {"item": "Office Rent", "amount": 2000},
+      {"item": "Salaries", "amount": 15000},
+      {"item": "Utilities", "amount": 500},
+      {"item": "Software", "amount": 800}
+    ],
+    "budget_limit": 20000
+  },
+
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start"
+    },
+    {
+      "id": "calculate_total",
+      "type": "action",
+      "name": "Calculate Total Expenses",
+      "executor": "cached",
+      "prompt": "Sum all amounts from the expenses list and store in 'total_expenses'",
+      "next": "check_budget"
+    },
+    {
+      "id": "check_budget",
+      "type": "decision",
+      "name": "Check Budget",
+      "code": "context['total_expenses'] <= context['budget_limit']",
+      "on_true": "within_budget",
+      "on_false": "over_budget"
+    },
+    {
+      "id": "within_budget",
+      "type": "action",
+      "name": "Calculate Remaining Budget",
+      "executor": "cached",
+      "prompt": "Calculate remaining budget (budget_limit - total_expenses) and store in 'remaining_budget'. Also add a message: 'Budget OK'",
+      "next": "end"
+    },
+    {
+      "id": "over_budget",
+      "type": "action",
+      "name": "Calculate Overspending",
+      "executor": "cached",
+      "prompt": "Calculate how much over budget we are (total_expenses - budget_limit) and store in 'overspending'. Also add a message: 'Budget exceeded!'",
+      "next": "end"
+    },
+    {
+      "id": "end",
+      "type": "end"
+    }
+  ],
+
+  "edges": [
+    {"from": "start", "to": "calculate_total"},
+    {"from": "calculate_total", "to": "check_budget"},
+    {"from": "check_budget", "to": "within_budget", "condition": "true"},
+    {"from": "check_budget", "to": "over_budget", "condition": "false"},
+    {"from": "within_budget", "to": "end"},
+    {"from": "over_budget", "to": "end"}
+  ]
+}
