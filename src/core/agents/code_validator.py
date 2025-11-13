@@ -26,9 +26,10 @@ class CodeValidatorAgent(BaseAgent):
         super().__init__("CodeValidator")
 
         # Imports peligrosos que no permitimos
+        # NOTA: Estamos en E2B sandbox (contenedor aislado), no en tu ordenador
+        # Solo bloqueamos ejecución directa de comandos shell
         self.dangerous_imports = {
-            "os", "subprocess", "sys", "shutil", "pathlib",
-            "socket", "urllib", "http", "ftplib"
+            "subprocess",  # Ejecución de comandos shell
         }
 
         # Python built-ins que están disponibles sin importar
