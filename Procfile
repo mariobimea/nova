@@ -10,7 +10,7 @@ release: bash scripts/migrate.sh
 # - Serves REST API
 # - Queues workflows in Celery
 # - Returns immediately (non-blocking)
-web: uvicorn src.api.main:app --host 0.0.0.0 --port $PORT
+web: bash -c 'uvicorn src.api.main:app --host 0.0.0.0 --port $PORT'
 
 # Worker Service: Celery worker
 # - Executes workflows in background
