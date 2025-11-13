@@ -38,6 +38,9 @@ class ModelRegistry:
     _REGISTRY: Dict[str, tuple[Type[ModelProvider], str]] = {
         # OpenAI models (full names)
         "gpt-4o-mini": (OpenAIProvider, "gpt-4o-mini"),
+        "gpt-4.1": (OpenAIProvider, "gpt-4.1"),
+        "gpt-4.1-mini": (OpenAIProvider, "gpt-4.1-mini"),
+        "gpt-4.1-nano": (OpenAIProvider, "gpt-4.1-nano"),
         "gpt-5-mini": (OpenAIProvider, "gpt-5-mini"),
         "gpt-5-codex": (OpenAIProvider, "gpt-5-codex"),
         "gpt-5": (OpenAIProvider, "gpt-5"),

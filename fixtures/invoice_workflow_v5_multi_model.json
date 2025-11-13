@@ -1,7 +1,7 @@
 {
   "name": "Invoice Processing v5 - Multi-Model",
-  "description": "Workflow minimalista donde label = prompt. Todos los nodos usan gpt-5 para máxima calidad",
-  "model": "gpt-5",
+  "description": "Workflow minimalista donde label = prompt. Todos los nodos usan gpt-4.1 (tool calling estable)",
+  "model": "gpt-4.1",
   "nodes": [
     {
       "id": "start",

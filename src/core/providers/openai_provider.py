@@ -33,6 +33,27 @@ class OpenAIProvider(ModelProvider):
             "max_tokens": 16384,
             "context_window": 128000
         },
+        "gpt-4.1": {
+            "api_name": "gpt-4.1",
+            "input_price": 2.00,
+            "output_price": 8.00,
+            "max_tokens": 128000,
+            "context_window": 1000000  # 1M token context window
+        },
+        "gpt-4.1-mini": {
+            "api_name": "gpt-4.1-mini",
+            "input_price": 0.40,
+            "output_price": 1.60,
+            "max_tokens": 128000,
+            "context_window": 1000000
+        },
+        "gpt-4.1-nano": {
+            "api_name": "gpt-4.1-nano",
+            "input_price": 0.10,
+            "output_price": 0.40,
+            "max_tokens": 128000,
+            "context_window": 1000000
+        },
         "gpt-5-mini": {
             "api_name": "gpt-5-mini",
             "input_price": 0.25,
@@ -180,6 +201,13 @@ class OpenAIProvider(ModelProvider):
 
                 message = response.choices[0].message
 
+                # Log response details for debugging
+                logger.debug(
+                    f"OpenAI response - finish_reason: {response.choices[0].finish_reason}, "
+                    f"has_content: {message.content is not None}, "
+                    f"has_tool_calls: {message.tool_calls is not None}"
+                )
+
                 if message.content:
                     logger.info(f"💭 AI thinking: {message.content[:150]}...")
 
@@ -252,12 +280,19 @@ class OpenAIProvider(ModelProvider):
 
                     continue
 
-                # AI generated code
+                # AI generated code (no tool calls)
                 else:
                     raw_code = message.content
 
                     if not raw_code:
-                        raise ExecutorError("OpenAI returned empty response")
+                        # Provide more context in error
+                        finish_reason = response.choices[0].finish_reason
+                        raise ExecutorError(
+                            f"OpenAI returned empty response. "
+                            f"Finish reason: {finish_reason}, "
+                            f"Model: {self.model_name}, "
+                            f"Iteration: {iteration + 1}/{max_tool_iterations}"
+                        )
 
                     generation_time_ms = int((time.time() - start_time) * 1000)
                     logger.info(
