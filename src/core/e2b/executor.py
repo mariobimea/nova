@@ -61,8 +61,9 @@ class E2BExecutor:
 
             # Ejecutar en E2B
             # Note: AsyncSandbox reads E2B_API_KEY from environment automatically
-            async with AsyncSandbox(timeout=timeout) as sandbox:
-                execution = await sandbox.run_code(full_code)
+            async with AsyncSandbox() as sandbox:
+                # Timeout goes in run_code(), not in AsyncSandbox constructor
+                execution = await sandbox.run_code(full_code, timeout=float(timeout))
 
                 # Revisar errores
                 if execution.error:
