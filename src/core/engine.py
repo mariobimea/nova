@@ -208,6 +208,7 @@ class GraphEngine:
         self,
         node: NodeType,
         context: ContextManager,
+        workflow_definition: Dict[str, Any],
         execution_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
@@ -216,6 +217,7 @@ class GraphEngine:
         Args:
             node: Node to execute
             context: Current workflow context
+            workflow_definition: Complete workflow definition (for model resolution)
             execution_id: Optional execution ID for chain_of_work logging
 
         Returns:
@@ -507,7 +509,12 @@ class GraphEngine:
 
             # Execute node
             try:
-                metadata = await self._execute_node(current_node, context, execution.id if execution else None)
+                metadata = await self._execute_node(
+                    current_node,
+                    context,
+                    workflow_definition,
+                    execution.id if execution else None
+                )
                 execution_trace.append(metadata)
 
                 # Persist to ChainOfWork if db_session is available
