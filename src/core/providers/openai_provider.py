@@ -154,20 +154,26 @@ class OpenAIProvider(ModelProvider):
                 logger.info(f"🔄 Tool calling iteration {iteration + 1}/{max_tool_iterations}")
 
                 # Build API parameters
-                # GPT-5 uses max_completion_tokens instead of max_tokens
+                # GPT-5 has different parameter requirements:
+                # - Uses max_completion_tokens instead of max_tokens
+                # - Only supports temperature=1 (default), no custom values
                 api_params = {
                     "model": self.model_config["api_name"],
                     "messages": messages,
                     "tools": tools,
                     "tool_choice": "auto",
-                    "temperature": 0.2,
                 }
 
-                # Use max_completion_tokens for GPT-5 models, max_tokens for others
+                # Configure parameters based on model
                 if self.model_name.startswith("gpt-5"):
+                    # GPT-5 specific parameters
                     api_params["max_completion_tokens"] = 2000
+                    # GPT-5 only supports temperature=1 (default)
+                    # Don't set temperature at all - let it use default
                 else:
+                    # GPT-4 and other models
                     api_params["max_tokens"] = 2000
+                    api_params["temperature"] = 0.2
 
                 # Call OpenAI
                 response = self.client.chat.completions.create(**api_params)
@@ -452,18 +458,24 @@ class OpenAIProvider(ModelProvider):
 
         try:
             # Build API parameters
-            # GPT-5 uses max_completion_tokens instead of max_tokens
+            # GPT-5 has different parameter requirements:
+            # - Uses max_completion_tokens instead of max_tokens
+            # - Only supports temperature=1 (default), no custom values
             api_params = {
                 "model": self.model_config["api_name"],
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
             }
 
-            # Use max_completion_tokens for GPT-5 models, max_tokens for others
+            # Configure parameters based on model
             if self.model_name.startswith("gpt-5"):
+                # GPT-5 specific parameters
                 api_params["max_completion_tokens"] = max_tokens
+                # GPT-5 only supports temperature=1 (default)
+                # Don't set temperature at all - let it use default
             else:
+                # GPT-4 and other models
                 api_params["max_tokens"] = max_tokens
+                api_params["temperature"] = temperature
 
             # Run synchronous OpenAI call in executor (v1.x SDK is sync)
             loop = asyncio.get_event_loop()
