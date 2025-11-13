@@ -41,12 +41,15 @@ class DataAnalyzerAgent(BaseAgent):
                 - type: str (tipo de data detectado)
                 - ... (metadata específica del tipo)
                 - analysis_code: str (código ejecutado)
+                - model: str (modelo usado)
+                - tokens: dict (input/output)
+                - cost_usd: float (costo de la llamada)
         """
         try:
             start_time = time.time()
 
             # 1. Generar código de análisis con IA
-            analysis_code = await self._generate_analysis_code(context_state.current)
+            analysis_code, ai_metadata = await self._generate_analysis_code(context_state.current)
 
             # 2. Ejecutar código en E2B
             self.logger.info("Ejecutando código de análisis en E2B...")
@@ -59,6 +62,9 @@ class DataAnalyzerAgent(BaseAgent):
             # 3. Parsear insights del resultado
             insights = self._parse_insights(execution_result)
             insights["analysis_code"] = analysis_code
+
+            # 4. Agregar metadata AI al resultado
+            insights.update(ai_metadata)
 
             execution_time_ms = (time.time() - start_time) * 1000
 
@@ -78,8 +84,13 @@ class DataAnalyzerAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
-    async def _generate_analysis_code(self, context: Dict) -> str:
-        """Genera código Python que analiza la data"""
+    async def _generate_analysis_code(self, context: Dict) -> tuple[str, dict]:
+        """
+        Genera código Python que analiza la data.
+
+        Returns:
+            tuple: (code, ai_metadata) donde ai_metadata contiene tokens, costo, modelo
+        """
 
         # Preparar schema del contexto (keys + tipos estimados)
         context_schema = {}
@@ -142,7 +153,8 @@ Retorna SOLO el código Python, sin explicaciones ni markdown.
                     "content": prompt
                 }
             ],
-            temperature=0.3
+            temperature=0.3,
+            timeout=30.0  # 30 segundos timeout
         )
 
         code = response.choices[0].message.content.strip()
@@ -153,7 +165,24 @@ Retorna SOLO el código Python, sin explicaciones ni markdown.
         if code.endswith("```"):
             code = code.rsplit("```", 1)[0]
 
-        return code.strip()
+        # Calcular metadata AI
+        usage = response.usage
+        tokens_input = usage.prompt_tokens if usage else 0
+        tokens_output = usage.completion_tokens if usage else 0
+
+        # Costo para gpt-4o-mini: $0.150/1M input, $0.600/1M output
+        cost_usd = (tokens_input * 0.150 / 1_000_000) + (tokens_output * 0.600 / 1_000_000)
+
+        ai_metadata = {
+            "model": self.model,
+            "tokens": {
+                "input": tokens_input,
+                "output": tokens_output
+            },
+            "cost_usd": cost_usd
+        }
+
+        return code.strip(), ai_metadata
 
     def _parse_insights(self, execution_result: Dict) -> Dict:
         """

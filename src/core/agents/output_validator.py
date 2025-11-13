@@ -70,7 +70,8 @@ class OutputValidatorAgent(BaseAgent):
                     }
                 ],
                 temperature=0.3,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                timeout=30.0  # 30 segundos timeout
             )
 
             execution_time_ms = (time.time() - start_time) * 1000
@@ -85,6 +86,19 @@ class OutputValidatorAgent(BaseAgent):
 
             # Agregar cambios detectados
             result["changes_detected"] = changes
+
+            # Agregar metadata AI
+            usage = response.usage
+            tokens_input = usage.prompt_tokens if usage else 0
+            tokens_output = usage.completion_tokens if usage else 0
+            cost_usd = (tokens_input * 0.150 / 1_000_000) + (tokens_output * 0.600 / 1_000_000)
+
+            result["model"] = self.model
+            result["tokens"] = {
+                "input": tokens_input,
+                "output": tokens_output
+            }
+            result["cost_usd"] = cost_usd
 
             if result["valid"]:
                 self.logger.info(f"✅ Output válido: {result['reason']}")
