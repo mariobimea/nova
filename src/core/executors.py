@@ -440,6 +440,21 @@ class CachedExecutor(ExecutorStrategy):
                 # At this point, generated_code is the TASK code
                 # (either direct, or after analysis enrichment)
 
+                # 2.5. Validate code accesses context correctly (static check)
+                code_valid, code_error = self._validate_context_access(generated_code)
+                if not code_valid:
+                    logger.warning(
+                        f"❌ Code validation failed on attempt {attempt}/3: {code_error}"
+                    )
+                    # Raise as CodeExecutionError to trigger retry with feedback
+                    raise CodeExecutionError(
+                        message=f"Code Validation Failed: {code_error}",
+                        code=generated_code,
+                        error_details=code_error
+                    )
+
+                logger.info("✅ Code validation passed (context access looks correct)")
+
                 # 3. Execute task code with E2B
                 execution_start = time.time()
                 result = await self.e2b_executor.execute(
@@ -927,6 +942,67 @@ Respond ONLY with valid JSON (no markdown):
             # If AI validation fails, default to PASS (don't block execution)
             logger.warning(f"AI validation failed: {e}. Defaulting to valid=True")
             return {"valid": True, "reason": f"AI validation error: {e}"}
+
+    def _validate_context_access(self, code: str) -> tuple[bool, Optional[str]]:
+        """
+        Validate that generated code properly accesses context dict.
+
+        Detects common mistakes like:
+        - Using undefined variables (email_user instead of context['email_user'])
+        - Function parameters that should come from context
+
+        Args:
+            code: Generated Python code
+
+        Returns:
+            (is_valid, error_message)
+            - is_valid: True if code looks correct, False if suspicious
+            - error_message: Explanation if invalid
+        """
+        import re
+
+        # Skip validation if code explicitly extracts from context
+        # Good patterns:
+        # - email_user = context['email_user']
+        # - email_user = context.get('email_user')
+        has_context_access = bool(re.search(r"context\s*\[\s*['\"]", code))
+
+        if has_context_access:
+            # Code properly accesses context
+            return (True, None)
+
+        # Check if code uses variables that might be context fields
+        # Common patterns that indicate missing context access:
+        # - function calls with bare identifiers: extract_data(email_user, password)
+        # - function definitions: def process(email_user, password):
+
+        # Look for common context field names used as bare identifiers
+        suspicious_patterns = [
+            r"\b(email_user|email_password|imap_host|smtp_host)\b",
+            r"\b(api_key|api_secret|client_id|client_secret)\b",
+            r"\b(db_host|db_user|db_password|db_name)\b",
+            r"def\s+\w+\s*\(\s*\w+_user\b",  # def process(email_user, ...)
+            r"def\s+\w+\s*\(\s*\w+_password\b",  # def process(password, ...)
+        ]
+
+        for pattern in suspicious_patterns:
+            matches = re.findall(pattern, code)
+            if matches:
+                # Found suspicious usage
+                logger.warning(
+                    f"⚠️  Code validation warning: Found potential undefined variables: {matches}"
+                )
+                return (
+                    False,
+                    f"Code uses variables that might not be defined: {', '.join(set(matches))}.\n\n"
+                    f"Remember to extract from context first:\n"
+                    f"  email_user = context['email_user']\n"
+                    f"  password = context['email_password']\n\n"
+                    f"DON'T use bare identifiers in function calls or definitions."
+                )
+
+        # No suspicious patterns found
+        return (True, None)
 
     def _build_self_determination_prompt(
         self,

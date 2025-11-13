@@ -218,7 +218,16 @@ class KnowledgeManager:
         if not context:
             return "CONTEXT AVAILABLE:\n- (empty)"
 
-        lines = ["CONTEXT AVAILABLE:"]
+        lines = [
+            "CONTEXT AVAILABLE (access with context['key']):",
+            "",
+            "IMPORTANT: The context dict is injected in your code automatically.",
+            "Access fields like this:",
+            "  email_user = context['email_user']",
+            "  password = context['email_password']",
+            "",
+            "Available fields:"
+        ]
 
         # Define which fields should be truncated (heavy binary/base64 data)
         truncate_fields = {
@@ -294,8 +303,8 @@ class KnowledgeManager:
                 # Other types - just show type
                 repr_value = f"<{value_type}>"
 
-            # Build line with metadata
-            line = f"- {key}: {repr_value} ({value_type})"
+            # Build line with metadata - Show how to access the field
+            line = f"- context['{key}'] = {repr_value} ({value_type})"
 
             if metadata_tags:
                 line += f"\n  → {' | '.join(metadata_tags)}"
