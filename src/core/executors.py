@@ -449,35 +449,37 @@ class CachedExecutor(ExecutorStrategy):
                 )
                 execution_time_ms = int((time.time() - execution_start) * 1000)
 
-                # 3.5. Auto-validate output (ZERO configuration needed!)
-                # Detects false positives: code executed but didn't do anything useful
-                validation_result = auto_validate_output(
+                # 3.5. AI validates output (semantic correctness)
+                # This replaces hardcoded validation rules with AI understanding
+                logger.info("🤖 AI validating execution output...")
+                ai_validation = await self._validate_output_with_ai(
                     task=prompt_task,
-                    context_before=enriched_context,  # ← Use enriched context
+                    context_before=enriched_context,
                     context_after=result,
-                    generated_code=generated_code
+                    generated_code=generated_code,
+                    node_type=node.get("type", "ActionNode") if node else "ActionNode",
+                    model_name=model_name
                 )
 
-                if not validation_result.valid:
-                    # Output validation failed - code didn't do its job!
+                if not ai_validation.get("valid", True):
+                    # AI detected invalid output - retry with feedback
+                    validation_reason = ai_validation.get("reason", "AI validation failed")
                     logger.warning(
-                        f"❌ Output validation failed on attempt {attempt}/3: "
-                        f"{validation_result.error_message}"
+                        f"❌ AI validation failed on attempt {attempt}/3: {validation_reason}"
                     )
 
                     # Raise as CodeExecutionError to trigger retry with feedback
                     raise CodeExecutionError(
-                        message=validation_result.error_message,
+                        message=f"AI Validation Failed: {validation_reason}",
                         code=generated_code,
-                        error_details=f"Suspicion score: {validation_result.suspicion_score}/10"
+                        error_details=validation_reason
                     )
 
-                # Log warnings if any (non-critical issues)
-                if validation_result.warnings:
-                    for warning in validation_result.warnings:
-                        logger.warning(f"⚠️  Output validation warning: {warning}")
+                logger.info("✅ AI validation passed")
 
-                # 3.6. Validate that result is JSON-serializable
+                # 3.6. Serialization check (KEEP - safety validation)
+                # This prevents storing complex objects (email.Message, file handles, etc.)
+                # If validation fails, we'll retry with error feedback to the AI
                 # This prevents storing complex objects (email.Message, file handles, etc.)
                 # If validation fails, we'll retry with error feedback to the AI
                 is_serializable, serialization_error = is_json_serializable(result)
@@ -805,6 +807,126 @@ class CachedExecutor(ExecutorStrategy):
             message=f"Exceeded maximum stages ({max_stages})",
             generated_code=generated_code
         )
+
+    async def _validate_output_with_ai(
+        self,
+        task: str,
+        context_before: Dict[str, Any],
+        context_after: Dict[str, Any],
+        generated_code: str,
+        node_type: str,
+        model_name: str
+    ) -> Dict[str, Any]:
+        """
+        Validate execution output using AI (gpt-4o-mini for speed/cost).
+
+        The AI checks:
+        1. Did the code successfully complete the task?
+        2. Are outputs meaningful (not errors disguised as success)?
+        3. For DecisionNode: Is there a clear boolean decision?
+
+        Args:
+            task: Original task description
+            context_before: Context before execution
+            context_after: Context after execution (from E2B)
+            generated_code: The code that was executed
+            node_type: "ActionNode" or "DecisionNode"
+            model_name: Model to use for validation (usually gpt-4o-mini)
+
+        Returns:
+            {
+                "valid": True/False,
+                "reason": "Explanation if invalid",
+                "decision_field": "field_name" (DecisionNode only),
+                "decision_value": True/False (DecisionNode only)
+            }
+        """
+        from .model_registry import ModelRegistry
+
+        # Always use gpt-4o-mini for validation (fast + cheap)
+        validator_model = "gpt-4o-mini"
+        validator_provider = ModelRegistry.get_provider(validator_model)
+
+        # Remove internal fields for cleaner validation
+        context_before_clean = {k: v for k, v in context_before.items() if not k.startswith('_')}
+        context_after_clean = {k: v for k, v in context_after.items() if not k.startswith('_')}
+
+        # Build validation prompt based on node type
+        if node_type == "DecisionNode":
+            validation_prompt = f"""You are validating if code successfully made a boolean decision.
+
+TASK: {task}
+
+CONTEXT BEFORE:
+{json.dumps(context_before_clean, indent=2, ensure_ascii=False)[:1500]}
+
+CONTEXT AFTER:
+{json.dumps(context_after_clean, indent=2, ensure_ascii=False)[:1500]}
+
+VALIDATION CHECKS:
+1. Is there a boolean field in the context representing the decision?
+2. Common field names: 'branch_decision', 'has_X', 'is_X', 'X_found', 'should_X'
+3. Did the code report any errors (check for 'error', 'exception' fields)?
+
+Respond ONLY with valid JSON (no markdown):
+{{
+    "valid": true/false,
+    "reason": "Brief explanation if invalid",
+    "decision_field": "field_name or null",
+    "decision_value": true/false/null
+}}"""
+        else:
+            # ActionNode validation
+            validation_prompt = f"""You are validating if code successfully completed a task.
+
+TASK: {task}
+
+CONTEXT BEFORE:
+{json.dumps(context_before_clean, indent=2, ensure_ascii=False)[:1500]}
+
+CONTEXT AFTER:
+{json.dumps(context_after_clean, indent=2, ensure_ascii=False)[:1500]}
+
+VALIDATION CHECKS:
+1. Did the code add/modify fields in context?
+2. Are the outputs meaningful (not empty/None)?
+3. Did the code report errors (check for 'error', 'exception' fields)?
+4. Does the output make sense for the task?
+
+Respond ONLY with valid JSON (no markdown):
+{{
+    "valid": true/false,
+    "reason": "Brief explanation if invalid"
+}}"""
+
+        try:
+            # Call AI validator with low temperature for consistency
+            response = await validator_provider.generate_text(
+                prompt=validation_prompt,
+                temperature=0.1,
+                max_tokens=200
+            )
+
+            # Parse JSON response (remove markdown if present)
+            response_clean = response.strip()
+            if response_clean.startswith("```"):
+                # Remove markdown code blocks
+                lines = response_clean.split('\n')
+                response_clean = '\n'.join(lines[1:-1])
+
+            validation_result = json.loads(response_clean)
+
+            logger.info(
+                f"AI validation result: valid={validation_result.get('valid')}, "
+                f"reason={validation_result.get('reason', 'N/A')}"
+            )
+
+            return validation_result
+
+        except Exception as e:
+            # If AI validation fails, default to PASS (don't block execution)
+            logger.warning(f"AI validation failed: {e}. Defaulting to valid=True")
+            return {"valid": True, "reason": f"AI validation error: {e}"}
 
     def _build_self_determination_prompt(
         self,

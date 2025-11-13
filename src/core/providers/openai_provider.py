@@ -412,6 +412,46 @@ class OpenAIProvider(ModelProvider):
             "output": self.model_config["output_price"]
         }
 
+    async def generate_text(
+        self,
+        prompt: str,
+        temperature: float = 0.1,
+        max_tokens: int = 200
+    ) -> str:
+        """
+        Generate text with OpenAI (simple mode, no tool calling).
+
+        Used for AI validation, summaries, etc.
+
+        Args:
+            prompt: Text prompt
+            temperature: Temperature (0.0-1.0, lower = more deterministic)
+            max_tokens: Max tokens to generate
+
+        Returns:
+            Generated text
+        """
+        import asyncio
+
+        try:
+            # Run synchronous OpenAI call in executor (v1.x SDK is sync)
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=self.model_config["api_name"],
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+            )
+
+            return response.choices[0].message.content
+
+        except Exception as e:
+            logger.error(f"OpenAI generate_text failed: {e}")
+            raise ExecutorError(f"OpenAI API error: {e}")
+
     def get_model_name(self) -> str:
         """Get model name."""
         return self.model_name
