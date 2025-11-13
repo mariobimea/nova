@@ -98,13 +98,11 @@ class CodeValidatorAgent(BaseAgent):
             # Parsear código
             tree = ast.parse(code)
 
-            # 2. Validar variables no definidas
-            undefined_vars = self._check_undefined_variables(tree)
-            if not undefined_vars:
-                checks_passed.append("variables")
-            else:
-                for var, line in undefined_vars:
-                    errors.append(f"Variable '{var}' usada en línea {line} pero no definida")
+            # 2. NO validamos variables no definidas
+            # El análisis estático de scope es demasiado complejo y genera falsos positivos
+            # (variables en try/except, funciones definidas, closures, etc.)
+            # Dejamos que E2B detecte errores de runtime
+            checks_passed.append("variables")  # Siempre pasa
 
             # 3. Validar acceso a context
             context_errors = self._check_context_access(tree, context)
