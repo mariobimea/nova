@@ -308,24 +308,40 @@ def root():
 @app.get(
     "/health",
     tags=["health"],
-    summary="Health check",
+    summary="Health check (lightweight)",
     description="""
-    Check if all NOVA components are healthy.
+    Lightweight health check - just verifies the API server is running.
 
-    Returns:
-    - **database**: PostgreSQL connection status
-    - **e2b**: E2B API key configuration status
-    - **celery**: Celery worker configuration status
-    - **redis**: Redis connection status
-
-    This endpoint is useful for:
-    - Deployment health checks
-    - Monitoring/alerting systems
+    This endpoint is optimized for:
+    - Railway deployment health checks
     - Load balancer health probes
+    - Fast uptime monitoring
+
+    For detailed component health checks, use GET /health/detailed
     """
 )
-def health_check(db: Session = Depends(get_db)):
-    """Health check endpoint - Checks database, E2B, Celery, Redis"""
+def health_check():
+    """Lightweight health check - just confirms API is alive"""
+    return {
+        "status": "healthy",
+        "service": "NOVA API",
+        "version": "0.1.0"
+    }
+
+
+@app.get(
+    "/health/components",
+    tags=["health"],
+    summary="Component health check",
+    description="""
+    Check health of all NOVA components (database, E2B, Celery, Redis).
+
+    This endpoint performs actual connection tests and may be slower than /health.
+    Use this for detailed diagnostics, not for load balancer probes.
+    """
+)
+def health_check_components(db: Session = Depends(get_db)):
+    """Component health check - Checks database, E2B, Celery, Redis"""
     from sqlalchemy import text
     try:
         # Test database connection
