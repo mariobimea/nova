@@ -259,7 +259,8 @@ class CachedExecutor(ExecutorStrategy):
         self,
         task: str,
         context: Dict[str, Any],
-        error_history: Optional[List[Dict]] = None
+        error_history: Optional[List[Dict]] = None,
+        system_message: Optional[str] = None
     ) -> tuple[str, Dict[str, Any]]:
         """
         Generate Python code using OpenAI API with tool calling for dynamic doc search.
@@ -300,25 +301,27 @@ class CachedExecutor(ExecutorStrategy):
             all_tool_calls = []
 
             # Build initial messages (minimal prompt, no pre-loaded docs)
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a Python code generator for the NOVA workflow engine.\n\n"
-                        "TOOLS AVAILABLE:\n"
-                        "- search_documentation(query, source?, top_k?): Search integration docs for code examples\n\n"
-                        "WORKFLOW:\n"
-                        "1. Analyze the task and context\n"
-                        "2. IF you need docs: Use search_documentation() to find relevant API docs\n"
-                        "   - Search for specific patterns (e.g., 'send email SMTP', 'open PDF bytes')\n"
-                        "   - You can search 2-3 times max if needed\n"
-                        "3. Once you have enough info (or if docs aren't needed), generate Python code immediately\n\n"
-                        "IMPORTANT:\n"
-                        "- Don't search excessively - 1-3 searches should be enough\n"
-                        "- If you can solve the task without docs, do it directly\n"
-                        "- Generate code as soon as you have sufficient information\n\n"
-                        "CODE REQUIREMENTS:\n"
-                        "- Use only pre-installed libraries (see environment specs below)\n"
+            # Use custom system message if provided (for AI self-determination)
+            if system_message:
+                system_content = system_message
+            else:
+                system_content = (
+                    "You are a Python code generator for the NOVA workflow engine.\n\n"
+                    "first, analyze the input data that you have to process and teh context"
+                    "TOOLS AVAILABLE:\n"
+                    "- search_documentation(query, source?, top_k?): Search integration docs for code examples\n\n"
+                    "WORKFLOW:\n"
+                    "1. Analyze the task and context\n"
+                    "2. IF you need docs: Use search_documentation() to find relevant API docs\n"
+                    "   - Search for specific patterns (e.g., 'send email SMTP', 'open PDF bytes')\n"
+                    "   - You can search 2-3 times max if needed\n"
+                    "3. Once you have enough info (or if docs aren't needed), generate Python code immediately\n\n"
+                    "IMPORTANT:\n"
+                    "- Don't search excessively - 1-3 searches should be enough\n"
+                    "- If you can solve the task without docs, do it directly\n"
+                    "- Generate code as soon as you have sufficient information\n\n"
+                    "CODE REQUIREMENTS:\n"
+                    "- Use only pre-installed libraries (see environment specs below)\n"
                         "- Code MUST end with EXACTLY ONE print(json.dumps({...})) statement\n"
                         "- Output format: {\"status\": \"success\", \"context_updates\": {...}, \"message\": \"...\"}\n"
                         "- Include proper error handling\n"
@@ -329,7 +332,12 @@ class CachedExecutor(ExecutorStrategy):
                         "- SMTP/IMAP: Use smtplib/imaplib from standard library\n"
                         "- Context dict is injected automatically (access with context['key'])\n"
                         "- Network access available\n"
-                    )
+                )
+
+            messages = [
+                {
+                    "role": "system",
+                    "content": system_content
                 },
                 {
                     "role": "user",
@@ -591,14 +599,23 @@ class CachedExecutor(ExecutorStrategy):
 
         logger.info(f"CachedExecutor executing task: {prompt_task[:100]}...")
 
-        # Retry loop (max 3 attempts)
+        # ═══════════════════════════════════════════════════════════════
+        # AI SELF-DETERMINATION: AI decides if analysis needed
+        # ═══════════════════════════════════════════════════════════════
+
+        enriched_context = context.copy()
+        analysis_metadata = None
+        max_stages = 2  # analysis + task
+        current_stage = 0
+
+        # Retry loop (max 3 attempts) - applies to FINAL task execution
         for attempt in range(1, 4):
             try:
                 logger.info(f"Attempt {attempt}/3: Generating code...")
 
                 # DEBUG: Log context being passed to AI
                 logger.info(f"📊 Context passed to AI (attempt {attempt}):")
-                for key, value in context.items():
+                for key, value in enriched_context.items():
                     if isinstance(value, str) and len(value) > 100:
                         logger.info(f"   {key}: <string, {len(value)} chars>")
                     elif isinstance(value, bytes):
@@ -606,30 +623,109 @@ class CachedExecutor(ExecutorStrategy):
                     else:
                         logger.info(f"   {key}: {value}")
 
-                # 1. Generate code with OpenAI tool calling
-                # AI searches docs dynamically using search_documentation() tool
-                generation_start = time.time()
-                generated_code, tool_metadata = await self._generate_code_with_tools(
-                    task=prompt_task,
-                    context=context,
-                    error_history=error_history if error_history else None
-                )
-                generation_time_ms = int((time.time() - generation_start) * 1000)
+                # ═══════════════════════════════════════════════════════════
+                # STAGE LOOP: AI decides if analysis needed (max 2 stages)
+                # ═══════════════════════════════════════════════════════════
 
-                logger.info(f"Code generated successfully in {generation_time_ms}ms")
-                logger.info(f"Generated code ({len(generated_code)} chars):\n{generated_code}")  # Changed to INFO to always see it
+                for stage_num in range(1, max_stages + 1):
+                    logger.info(f"🔄 Stage {stage_num}/{max_stages}")
 
-                # Log tool calling details
-                if tool_metadata.get("tool_calls"):
-                    logger.info(f"🔍 AI made {tool_metadata['total_tool_calls']} documentation searches:")
-                    for i, tc in enumerate(tool_metadata["tool_calls"], 1):
-                        logger.info(f"   {i}. {tc['function']}({tc['arguments']})")
+                    # 1. Generate code with OpenAI tool calling
+                    # AI decides: analysis or task?
+                    generation_start = time.time()
 
-                # 3. Execute code with E2B
+                    # Build context summary
+                    context_summary = self.knowledge_manager.create_context_summary(
+                        enriched_context
+                    )
+
+                    # Build prompt with self-determination instructions
+                    system_prompt = self._build_self_determination_prompt(
+                        task=prompt_task,
+                        context_summary=context_summary,
+                        is_first_stage=(stage_num == 1 and attempt == 1)
+                    )
+
+                    generated_code, tool_metadata = await self._generate_code_with_tools(
+                        task=prompt_task,
+                        context=enriched_context,
+                        error_history=error_history if error_history else None,
+                        system_message=system_prompt  # Override with self-determination prompt
+                    )
+                    generation_time_ms = int((time.time() - generation_start) * 1000)
+
+                    logger.info(f"Code generated successfully in {generation_time_ms}ms")
+                    logger.info(f"Generated code ({len(generated_code)} chars):\n{generated_code}")
+
+                    # Log tool calling details
+                    if tool_metadata.get("tool_calls"):
+                        logger.info(f"🔍 AI made {tool_metadata['total_tool_calls']} documentation searches:")
+                        for i, tc in enumerate(tool_metadata["tool_calls"], 1):
+                            logger.info(f"   {i}. {tc['function']}({tc['arguments']})")
+
+                    # 2. Detect which stage AI chose
+                    detected_stage = self._detect_stage_from_code(generated_code)
+                    logger.info(f"🔍 Detected stage: {detected_stage.upper()}")
+
+                    if detected_stage == "analysis":
+                        # ═══ STAGE 1: AI decided to analyze data first ═══
+                        logger.info("📊 AI decided to analyze data first")
+
+                        try:
+                            # Execute analysis code
+                            execution_start = time.time()
+                            analysis_result = await self.e2b_executor.execute(
+                                code=generated_code,
+                                context=enriched_context,
+                                timeout=min(timeout // 2, 30)  # Half timeout or 30s max
+                            )
+                            execution_time_ms = int((time.time() - execution_start) * 1000)
+
+                            # Enrich context with analysis results
+                            enriched_context['_data_analysis'] = analysis_result
+
+                            # Track analysis metadata
+                            analysis_metadata = {
+                                "analysis_code": generated_code,
+                                "analysis_result": analysis_result,
+                                "generation_time_ms": generation_time_ms,
+                                "execution_time_ms": execution_time_ms,
+                                "total_time_ms": generation_time_ms + execution_time_ms,
+                                "tool_calls": tool_metadata.get("tool_calls", [])
+                            }
+
+                            logger.info(
+                                f"✅ Analysis complete: "
+                                f"{list(analysis_result.keys()) if isinstance(analysis_result, dict) else type(analysis_result)}"
+                            )
+
+                            # Continue to next stage (task generation)
+                            continue
+
+                        except Exception as e:
+                            logger.warning(f"⚠️ Analysis stage failed: {e}")
+                            # Add error to context and continue
+                            enriched_context['_data_analysis'] = {
+                                "error": str(e),
+                                "note": "Analysis failed, proceeding without analysis"
+                            }
+                            # Continue to task stage
+                            continue
+
+                    # ═══ STAGE 2 (or direct): Execute task code ═══
+                    elif detected_stage == "task":
+                        logger.info("⚙️ AI generated task code")
+                        # Break out of stage loop, proceed to execution
+                        break
+
+                # At this point, generated_code is the TASK code
+                # (either direct, or after analysis enrichment)
+
+                # 3. Execute task code with E2B
                 execution_start = time.time()
                 result = await self.e2b_executor.execute(
                     code=generated_code,
-                    context=context,
+                    context=enriched_context,  # ← Use enriched context
                     timeout=timeout
                 )
                 execution_time_ms = int((time.time() - execution_start) * 1000)
@@ -638,7 +734,7 @@ class CachedExecutor(ExecutorStrategy):
                 # Detects false positives: code executed but didn't do anything useful
                 validation_result = auto_validate_output(
                     task=prompt_task,
-                    context_before=context,
+                    context_before=enriched_context,  # ← Use enriched context
                     context_after=result,
                     generated_code=generated_code
                 )
@@ -740,6 +836,12 @@ class CachedExecutor(ExecutorStrategy):
                     "total_tool_calls": tool_metadata.get("total_tool_calls", 0),  # Total searches made
                     "context_summary": tool_metadata.get("context_summary", ""),  # What context AI saw
                     "documentation_retrieved": documentation_retrieved,  # Full docs AI had access to
+
+                    # ⭐ Two-stage generation metadata (AI self-determination)
+                    "two_stage_enabled": analysis_metadata is not None,
+                    "ai_self_determined": True,  # AI decided if analysis needed
+                    "stages_used": 2 if analysis_metadata else 1,  # 1=direct task, 2=analysis+task
+                    "analysis_metadata": analysis_metadata,  # Stage 1 details (if ran)
                 }
 
                 logger.info(
@@ -799,6 +901,293 @@ class CachedExecutor(ExecutorStrategy):
             generated_code=None,
             error_history=[]
         )
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # AI SELF-DETERMINATION: Two-Stage Code Generation
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def _detect_stage_from_code(self, code: str) -> str:
+        """
+        Detect which stage the AI generated code for.
+
+        The AI marks its code with stage identifiers:
+        - "# STAGE: ANALYSIS" → Stage 1 (data analysis)
+        - "# STAGE: TASK" → Stage 2 (task execution)
+
+        Args:
+            code: Generated Python code
+
+        Returns:
+            "analysis" or "task"
+        """
+        # Look for stage marker in first 10 lines
+        lines = code.strip().split('\n')[:10]
+
+        for line in lines:
+            line_clean = line.strip().upper()
+            if "# STAGE: ANALYSIS" in line_clean:
+                return "analysis"
+            elif "# STAGE: TASK" in line_clean:
+                return "task"
+
+        # Default: assume task if no marker
+        logger.warning("⚠️ No stage marker found in code, assuming TASK stage")
+        return "task"
+
+    async def _execute_with_ai_self_determination(
+        self,
+        task: str,
+        context: Dict[str, Any],
+        timeout: int
+    ) -> Dict[str, Any]:
+        """
+        Execute using AI self-determination approach.
+
+        Flow:
+        1. AI receives task + context
+        2. AI decides: Need analysis? Or go straight to task?
+        3. AI generates code marked with stage identifier
+        4. System detects stage and routes accordingly
+        5. If analysis stage: execute, enrich context, loop back to step 1
+        6. If task stage: execute and return results
+
+        This is more flexible than heuristics because AI makes the decision
+        based on the actual task requirements, not hardcoded rules.
+
+        Args:
+            task: User's task description
+            context: Execution context (may contain large data)
+            timeout: Execution timeout in seconds
+
+        Returns:
+            Execution result with metadata
+
+        Raises:
+            ExecutorError: If execution fails
+        """
+        import time
+
+        logger.info("🤖 Using AI SELF-DETERMINATION approach")
+
+        enriched_context = context.copy()
+        analysis_metadata = None
+        max_stages = 2  # Prevent infinite loops (analysis + task)
+
+        for stage_num in range(1, max_stages + 1):
+            logger.info(f"═══ STAGE {stage_num}/{max_stages} ═══")
+
+            # Build context summary for this stage
+            context_summary = self.knowledge_manager.create_context_summary(
+                enriched_context
+            )
+
+            # Build prompt with self-determination instructions
+            system_prompt = self._build_self_determination_prompt(
+                task=task,
+                context_summary=context_summary,
+                is_first_stage=(stage_num == 1)
+            )
+
+            # Generate code with tool calling (docs search available)
+            generation_start = time.time()
+            result = await self._generate_code_with_tools(
+                context=enriched_context,
+                system_message=system_prompt
+            )
+            generation_time_ms = int((time.time() - generation_start) * 1000)
+
+            generated_code = result['code']
+            tool_calls = result.get('tool_calls', [])
+
+            # Detect which stage AI chose
+            detected_stage = self._detect_stage_from_code(generated_code)
+            logger.info(f"🔍 Detected stage: {detected_stage.upper()}")
+
+            if detected_stage == "analysis":
+                # AI chose to analyze data first
+                logger.info("📊 AI decided to analyze data first")
+
+                try:
+                    # Execute analysis code
+                    execution_start = time.time()
+                    analysis_result = await self.sandbox.execute_code(
+                        code=generated_code,
+                        context=enriched_context,
+                        timeout=timeout
+                    )
+                    execution_time_ms = int((time.time() - execution_start) * 1000)
+
+                    # Enrich context with analysis results
+                    enriched_context['_data_analysis'] = analysis_result
+
+                    # Track analysis metadata
+                    analysis_metadata = {
+                        "analysis_code": generated_code,
+                        "analysis_result": analysis_result,
+                        "generation_time_ms": generation_time_ms,
+                        "execution_time_ms": execution_time_ms,
+                        "total_time_ms": generation_time_ms + execution_time_ms,
+                        "tool_calls": tool_calls
+                    }
+
+                    logger.info(
+                        f"✅ Analysis complete: "
+                        f"{list(analysis_result.keys()) if isinstance(analysis_result, dict) else type(analysis_result)}"
+                    )
+
+                    # Continue to next stage (task generation)
+                    continue
+
+                except Exception as e:
+                    logger.warning(f"⚠️ Analysis stage failed: {e}")
+                    # Add error to context and continue
+                    enriched_context['_data_analysis'] = {
+                        "error": str(e),
+                        "note": "Analysis failed, proceeding without analysis"
+                    }
+                    continue
+
+            elif detected_stage == "task":
+                # AI chose to go straight to task (or this is stage 2 after analysis)
+                logger.info("⚙️ AI generating task code")
+
+                # Execute task code
+                execution_start = time.time()
+                task_result = await self.sandbox.execute_code(
+                    code=generated_code,
+                    context=enriched_context,
+                    timeout=timeout
+                )
+                execution_time_ms = int((time.time() - execution_start) * 1000)
+
+                # Build final metadata
+                metadata = {
+                    "_ai_metadata": {
+                        "two_stage_enabled": True,
+                        "ai_self_determined": True,
+                        "stages_used": stage_num,
+                        "analysis_metadata": analysis_metadata,
+                        "task_metadata": {
+                            "task_code": generated_code,
+                            "generation_time_ms": generation_time_ms,
+                            "execution_time_ms": execution_time_ms,
+                            "total_time_ms": generation_time_ms + execution_time_ms,
+                            "tool_calls": tool_calls
+                        }
+                    }
+                }
+
+                # Merge task result with metadata
+                if isinstance(task_result, dict):
+                    return {**task_result, **metadata}
+                else:
+                    return {"result": task_result, **metadata}
+
+        # Should never reach here (max_stages exceeded)
+        raise ExecutorError(
+            message=f"Exceeded maximum stages ({max_stages})",
+            generated_code=generated_code
+        )
+
+    def _build_self_determination_prompt(
+        self,
+        task: str,
+        context_summary: str,
+        is_first_stage: bool
+    ) -> str:
+        """
+        Build system prompt for AI self-determination.
+
+        The prompt instructs the AI to:
+        1. Decide if data analysis is needed
+        2. Mark code with stage identifier
+        3. Generate appropriate code
+
+        Args:
+            task: User's task description
+            context_summary: Summarized context
+            is_first_stage: Whether this is the first generation
+
+        Returns:
+            System prompt string
+        """
+        if is_first_stage:
+            stage_instructions = """
+OPTIONAL TWO-STAGE APPROACH:
+
+If the context contains complex data (PDFs, images, large base64 strings, binary data)
+that you need to UNDERSTAND before solving the task:
+
+1. First, generate ANALYSIS code marked with:
+   # STAGE: ANALYSIS
+
+   This code should:
+   - Analyze the data structure/content/format
+   - Extract metadata (type, size, properties)
+   - Identify key characteristics needed to solve the task
+   - Return insights as a dict with clear keys
+
+   Example:
+   ```python
+   # STAGE: ANALYSIS
+   import base64
+   import fitz  # PyMuPDF
+
+   pdf_bytes = base64.b64decode(context['pdf_data_b64'])
+   doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+   result = {
+       "type": "pdf",
+       "pages": len(doc),
+       "has_text_layer": bool(doc[0].get_text().strip()),
+       "file_size_kb": len(pdf_bytes) // 1024
+   }
+   ```
+
+2. After analysis runs, you'll receive enriched context with results in context['_data_analysis']
+3. Then generate TASK code using those insights
+
+If the context is simple/clear (just strings, numbers, small data),
+skip analysis and go directly to:
+
+# STAGE: TASK
+
+Your task-solving code here.
+"""
+        else:
+            # Second stage - AI already did analysis
+            stage_instructions = """
+You previously analyzed the data. The analysis results are in context['_data_analysis'].
+
+Now generate the TASK code marked with:
+# STAGE: TASK
+
+Use the analysis insights to solve the task effectively.
+"""
+
+        return f"""You are NOVA's code generation system.
+
+Your job: Generate Python code to solve the user's task.
+
+{stage_instructions}
+
+AVAILABLE TOOLS:
+You can call search_documentation(library, query) at ANY point to get API documentation.
+Example: If you need to work with PDFs, search for "pymupdf" or "pypdf" first.
+
+CONTEXT PROVIDED:
+{context_summary}
+
+USER TASK:
+{task}
+
+REQUIREMENTS:
+- Mark your code with the appropriate stage comment
+- Return results by modifying the 'context' dict
+- Handle errors gracefully
+- Use clear variable names
+
+Generate the appropriate Python code now."""
 
 
 class AIExecutor(ExecutorStrategy):
