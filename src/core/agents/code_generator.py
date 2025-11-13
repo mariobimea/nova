@@ -155,16 +155,24 @@ class CodeGeneratorAgent(BaseAgent):
     ) -> str:
         """Construye el prompt para generación de código"""
 
-        # Schema del contexto (keys + tipos)
+        # Schema del contexto (keys + tipos + valores de ejemplo)
+        # IMPORTANTE: Mostrar los valores reales (no representaciones confusas)
+        # para que el LLM genere código correcto
         context_schema = {}
         for key, value in context.items():
             if isinstance(value, str):
                 if len(value) > 100:
-                    context_schema[key] = f"str (length: {len(value)})"
+                    # Para strings largos, mostrar solo tipo y longitud
+                    context_schema[key] = f"<string: {len(value)} chars>"
                 else:
-                    context_schema[key] = f"str: '{value[:50]}...'"
+                    # Para strings cortos, mostrar el valor real
+                    context_schema[key] = value
+            elif isinstance(value, (int, float, bool)):
+                # Para números y booleanos, mostrar el valor real
+                context_schema[key] = value
             else:
-                context_schema[key] = f"{type(value).__name__}: {str(value)[:50]}"
+                # Para otros tipos, mostrar tipo
+                context_schema[key] = f"<{type(value).__name__}>"
 
         prompt = f"""Genera código Python que resuelve esta tarea:
 
