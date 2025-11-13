@@ -2,17 +2,17 @@
 KnowledgeManager - Manages knowledge base documentation for AI code generation.
 
 This component:
-1. Loads markdown documentation files with caching (deprecated - uses vector store now)
-2. Detects which integrations are needed based on task and context
-3. Retrieves relevant documentation from vector store
-4. Summarizes context for AI prompts
-5. Builds complete prompts for code generation
+1. Detects which integrations are needed based on task and context
+2. Retrieves relevant documentation from RAG service (nova-rag)
+3. Summarizes context for AI prompts
+4. Builds complete prompts for code generation
+
+NOTE: This version ONLY uses the remote RAG service (nova-rag).
+Local vector store and file loading have been removed for simplicity.
 """
 
-import os
 import logging
 from typing import Dict, List, Optional
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -20,82 +20,31 @@ logger = logging.getLogger(__name__)
 class KnowledgeManager:
     """Manages knowledge base documentation for AI-powered code generation."""
 
-    def __init__(self, knowledge_base_path: Optional[str] = None, use_vector_store: bool = True):
+    def __init__(self):
         """
         Initialize KnowledgeManager.
 
-        Args:
-            knowledge_base_path: Path to knowledge base directory.
-                                Defaults to /nova/knowledge
-            use_vector_store: Use vector store for doc retrieval (recommended).
-                             If False, falls back to loading .md files directly.
+        Automatically connects to RAG service (nova-rag) for documentation retrieval.
+        Raises an error if RAG service is not available.
         """
-        if knowledge_base_path is None:
-            # Default to /nova/knowledge (absolute path)
-            base_dir = Path(__file__).parent.parent.parent.parent
-            knowledge_base_path = str(base_dir / "knowledge")
-
-        self.knowledge_base_path = knowledge_base_path
-        self._cache: Dict[str, str] = {}  # In-memory cache for loaded files
-        self.use_vector_store = use_vector_store
-
-        # Initialize RAG client (remote vector store service) if enabled
-        if use_vector_store:
-            try:
-                from ..rag_client import get_rag_client
-                self.rag_client = get_rag_client()
-
-                # Check if RAG service is available
-                if self.rag_client.health_check():
-                    logger.info("KnowledgeManager initialized with RAG client (remote vector store)")
-                else:
-                    logger.warning("RAG service not ready yet. Falling back to file loading.")
-                    self.use_vector_store = False
-                    self.rag_client = None
-            except Exception as e:
-                logger.warning(f"Failed to initialize RAG client: {e}. Falling back to file loading.")
-                self.use_vector_store = False
-                self.rag_client = None
-        else:
-            self.rag_client = None
-
-    def load_file(self, relative_path: str) -> str:
-        """
-        Load a markdown file from the knowledge base with caching.
-
-        Args:
-            relative_path: Path relative to knowledge_base_path
-                          (e.g., "main.md" or "integrations/imap.md")
-
-        Returns:
-            File contents as string
-
-        Raises:
-            FileNotFoundError: If file doesn't exist
-            IOError: If file can't be read
-        """
-        # Check cache first
-        if relative_path in self._cache:
-            return self._cache[relative_path]
-
-        # Construct full path
-        full_path = os.path.join(self.knowledge_base_path, relative_path)
-
-        # Read file
-        if not os.path.exists(full_path):
-            raise FileNotFoundError(f"Knowledge file not found: {full_path}")
+        from ..rag_client import get_rag_client, RAGServiceError
 
         try:
-            with open(full_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            self.rag_client = get_rag_client()
 
-            # Cache it
-            self._cache[relative_path] = content
+            # Verify RAG service is healthy
+            if not self.rag_client.health_check():
+                raise RAGServiceError("RAG service not ready")
 
-            return content
+            logger.info("KnowledgeManager initialized with RAG client (nova-rag service)")
 
         except Exception as e:
-            raise IOError(f"Failed to read knowledge file {full_path}: {str(e)}")
+            logger.error(f"Failed to initialize RAG client: {e}")
+            raise RuntimeError(
+                f"KnowledgeManager requires RAG service to be available. "
+                f"Make sure nova-rag is running and RAG_SERVICE_URL is configured. "
+                f"Error: {e}"
+            )
 
     def detect_integrations(self, task: str, context: Dict) -> List[str]:
         """
@@ -327,7 +276,7 @@ class KnowledgeManager:
         top_k_per_integration: int = 3
     ) -> str:
         """
-        Retrieve relevant documentation from vector store.
+        Retrieve relevant documentation from RAG service.
 
         Args:
             task: Task description for semantic search
@@ -344,10 +293,6 @@ class KnowledgeManager:
             ...     integrations=["pymupdf"]
             ... )
         """
-        if not self.use_vector_store or self.rag_client is None:
-            logger.warning("RAG client not available, returning empty docs")
-            return ""
-
         all_docs = []
 
         # Query for each integration via RAG service
@@ -365,6 +310,7 @@ class KnowledgeManager:
                 if results:
                     all_docs.extend(results)
                     logger.debug(f"Retrieved {len(results)} chunks for {integration}")
+
             except Exception as e:
                 logger.error(f"Failed to query RAG service for {integration}: {e}")
                 # Continue with other integrations
@@ -378,7 +324,7 @@ class KnowledgeManager:
 
         for integration in integrations:
             # Get docs for this integration
-            integration_docs = [d for d in all_docs if d['source'] == integration]
+            integration_docs = [d for d in all_docs if d.get('source') == integration]
 
             if not integration_docs:
                 continue
@@ -405,10 +351,10 @@ class KnowledgeManager:
         Build complete prompt for AI code generation.
 
         Assembles:
-        1. main.md (always)
+        1. System instructions (from RAG service)
         2. Task description
         3. Context summary
-        4. Relevant integration docs (auto-detected)
+        4. Relevant integration docs (auto-detected via RAG)
         5. Error history (if retry)
 
         Args:
@@ -424,23 +370,37 @@ class KnowledgeManager:
                 - integrations_detected: List[str]
                 - context_summary: str
                 - docs_retrieved_count: int
-                - retrieval_method: str ("vector_store" or "file_loading")
         """
         sections = []
         metadata = {
             "integrations_detected": [],
             "context_summary": "",
-            "docs_retrieved_count": 0,
-            "retrieval_method": "none"
+            "docs_retrieved_count": 0
         }
 
-        # 1. Load main.md (always included)
+        # 1. System instructions (query RAG for "main" documentation)
         try:
-            main_doc = self.load_file("main.md")
-            sections.append(main_doc)
-        except FileNotFoundError:
-            # Fallback if main.md doesn't exist yet
-            sections.append("# NOVA AI Code Generation System\n\nGenerate Python code based on the task and context provided.")
+            main_results = self.rag_client.query(
+                query="NOVA code generation system instructions",
+                top_k=1,
+                filters={"topic": "system"}
+            )
+
+            if main_results:
+                sections.append(main_results[0]['text'])
+            else:
+                # Fallback if no system docs found
+                sections.append(
+                    "# NOVA AI Code Generation System\n\n"
+                    "Generate Python code based on the task and context provided."
+                )
+
+        except Exception as e:
+            logger.warning(f"Failed to retrieve system docs from RAG: {e}")
+            sections.append(
+                "# NOVA AI Code Generation System\n\n"
+                "Generate Python code based on the task and context provided."
+            )
 
         sections.append("\n---\n")
 
@@ -462,54 +422,21 @@ class KnowledgeManager:
             sections.append("## INTEGRATION DOCUMENTATION\n\n")
             sections.append(f"Relevant integrations detected: {', '.join(integrations)}\n\n")
 
-            # Use RAG service retrieval if available, otherwise fall back to file loading
-            if self.use_vector_store and self.rag_client is not None:
-                # NEW: Retrieve docs from RAG service
-                logger.info(f"Retrieving docs from RAG service for integrations: {integrations}")
+            logger.info(f"Retrieving docs from RAG service for integrations: {integrations}")
 
-                # Track retrieval stats
-                docs_count = 0
-                for integration in integrations:
-                    try:
-                        results = self.rag_client.query(
-                            query=f"{integration} {task}",
-                            top_k=3,  # 3 most relevant chunks per integration
-                            filters={"source": integration}
-                        )
-                        docs_count += len(results)
-                    except Exception as e:
-                        logger.error(f"RAG query failed for {integration}: {e}")
+            retrieved_docs = self.retrieve_docs(
+                task=task,
+                integrations=integrations,
+                top_k_per_integration=3
+            )
 
-                metadata["retrieval_method"] = "rag_service"
-                metadata["docs_retrieved_count"] = docs_count
-
-                retrieved_docs = self.retrieve_docs(
-                    task=task,
-                    integrations=integrations,
-                    top_k_per_integration=3
-                )
-
-                if retrieved_docs:
-                    sections.append(retrieved_docs)
-                else:
-                    sections.append("(No relevant documentation found in RAG service)\n\n")
-
+            if retrieved_docs:
+                sections.append(retrieved_docs)
+                # Count docs
+                metadata["docs_retrieved_count"] = retrieved_docs.count("---")
             else:
-                # FALLBACK: Load from .md files (old method)
-                logger.info("Using fallback file loading for integration docs")
-                metadata["retrieval_method"] = "file_loading"
-                metadata["docs_retrieved_count"] = len(integrations)  # One doc per integration
-
-                for integration in integrations:
-                    try:
-                        integration_path = f"integrations/{integration}.md"
-                        integration_doc = self.load_file(integration_path)
-                        sections.append(f"### {integration.upper()}\n\n")
-                        sections.append(integration_doc)
-                        sections.append("\n\n---\n\n")
-                    except FileNotFoundError:
-                        # Skip if integration doc doesn't exist
-                        sections.append(f"(Integration doc for '{integration}' not found)\n\n")
+                sections.append("(No relevant documentation found in RAG service)\n\n")
+                metadata["docs_retrieved_count"] = 0
 
         # 5. Error history - Show ALL previous failed attempts
         if error_history and len(error_history) > 0:

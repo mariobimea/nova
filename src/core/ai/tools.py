@@ -2,9 +2,7 @@
 AI Tools - Function calling definitions for OpenAI API.
 
 This module defines tools that the AI can use during code generation:
-- search_documentation: Search vector store for integration docs
-- (future) execute_test_code: Test generated code snippets
-- (future) validate_syntax: Check Python syntax before execution
+- search_documentation: Search RAG service (nova-rag) for integration docs
 """
 
 import logging
@@ -17,7 +15,7 @@ def get_search_documentation_tool() -> Dict[str, Any]:
     """
     Returns OpenAI function calling definition for search_documentation tool.
 
-    This tool allows the AI to search the vector store for relevant documentation
+    This tool allows the AI to search the RAG service (nova-rag) for relevant documentation
     during code generation. The AI can:
     - Search for specific API patterns
     - Filter by integration/library
@@ -99,16 +97,16 @@ def format_search_results(
     include_metadata: bool = False
 ) -> str:
     """
-    Format vector store search results for AI consumption.
+    Format RAG service search results for AI consumption.
 
     Args:
-        results: List of dicts from VectorStore.query() with keys:
+        results: List of dicts from RAGClient.query() with keys:
                  - text: Document chunk text
                  - source: Source library (e.g., "pymupdf")
                  - topic: Topic/category
-                 - distance: Similarity distance (lower = better match)
+                 - score: Relevance score (higher = better match)
         query: Original search query (for context)
-        include_metadata: Include distance scores and source info
+        include_metadata: Include scores and source info
 
     Returns:
         Formatted string ready to send back to AI
@@ -116,7 +114,7 @@ def format_search_results(
     Example output:
         SEARCH RESULTS for "open PDF from bytes" (3 results):
 
-        [1] Source: pymupdf | Distance: 0.82
+        [1] Source: pymupdf | Relevance: 0.92
         Opening Documents
 
         Access supported file types with:
@@ -129,7 +127,7 @@ def format_search_results(
 
         ---
 
-        [2] Source: pymupdf | Distance: 0.91
+        [2] Source: pymupdf | Relevance: 0.89
         ...
     """
     if not results:
@@ -143,8 +141,8 @@ def format_search_results(
         # Header with metadata
         if include_metadata:
             header = f"[{i}] Source: {result.get('source', 'unknown')}"
-            if 'distance' in result:
-                header += f" | Relevance: {1.0 - result['distance']:.2f}"
+            if 'score' in result:
+                header += f" | Relevance: {result['score']:.2f}"
             lines.append(header)
         else:
             lines.append(f"[{i}]")
@@ -163,19 +161,19 @@ def format_search_results(
 
 
 def execute_search_documentation(
-    vector_store,
+    rag_client,
     query: str,
     source: Optional[str] = None,
     top_k: int = 3
 ) -> str:
     """
-    Execute a documentation search and return formatted results.
+    Execute a documentation search via RAG service and return formatted results.
 
     This is the actual implementation that gets called when the AI
     uses the search_documentation tool.
 
     Args:
-        vector_store: VectorStore instance
+        rag_client: RAGClient instance (from get_rag_client())
         query: Search query from AI
         source: Optional source filter (e.g., "pymupdf")
         top_k: Number of results to return
@@ -184,16 +182,21 @@ def execute_search_documentation(
         Formatted search results as string
 
     Raises:
-        Exception: If vector store is unavailable or search fails
+        Exception: If RAG service is unavailable or search fails
     """
-    logger.info(f"AI searching docs: query='{query}', source={source}, top_k={top_k}")
+    logger.info(f"AI searching docs via RAG: query='{query}', source={source}, top_k={top_k}")
 
     try:
-        # Execute search
-        results = vector_store.query(
-            query_text=query,
+        # Build filters
+        filters = {}
+        if source:
+            filters["source"] = source
+
+        # Execute search via RAG service
+        results = rag_client.query(
+            query=query,
             top_k=top_k,
-            filter_source=source
+            filters=filters if filters else None
         )
 
         # Format results
@@ -203,13 +206,13 @@ def execute_search_documentation(
             include_metadata=True
         )
 
-        logger.info(f"Search returned {len(results)} results")
+        logger.info(f"RAG search returned {len(results)} results")
         logger.debug(f"Formatted results:\n{formatted[:200]}...")
 
         return formatted
 
     except Exception as e:
-        error_msg = f"Error searching documentation: {e}"
+        error_msg = f"Error searching documentation via RAG service: {e}"
         logger.error(error_msg)
         return f"ERROR: {error_msg}\n\nTry a different query or generate code without documentation."
 
