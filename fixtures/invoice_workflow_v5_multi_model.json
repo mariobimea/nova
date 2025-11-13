@@ -1,0 +1,131 @@
+{
+  "name": "Invoice Processing v5 - Multi-Model",
+  "description": "Workflow minimalista donde label = prompt. Todos los nodos usan gpt-5 para máxima calidad",
+  "model": "gpt-5",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "label": "Start"
+    },
+    {
+      "id": "read_email_and_extract_attachments",
+      "type": "action",
+      "label": "Read email and extract attachments",
+      "executor": "cached",
+      "prompt": "Read email and extract attachments",
+      "timeout": 60
+    },
+    {
+      "id": "has_pdf_decision",
+      "type": "decision",
+      "label": "Check if PDF attached",
+      "executor": "cached",
+      "prompt": "Check if PDF attached",
+      "timeout": 10
+    },
+    {
+      "id": "notify_missing_attachment",
+      "type": "action",
+      "label": "Notify sender about missing attachment",
+      "executor": "cached",
+      "prompt": "Notify sender about missing attachment",
+      "timeout": 30
+    },
+    {
+      "id": "extract_document_text",
+      "type": "action",
+      "label": "Extract text from document",
+      "executor": "cached",
+      "prompt": "Extract text from document",
+      "timeout": 90
+    },
+    {
+      "id": "parse_invoice_amount",
+      "type": "action",
+      "label": "Parse invoice amount",
+      "executor": "cached",
+      "prompt": "Parse invoice amount",
+      "timeout": 30
+    },
+    {
+      "id": "check_approval_threshold",
+      "type": "decision",
+      "label": "Check if amount exceeds approval threshold",
+      "executor": "cached",
+      "prompt": "Check if amount exceeds approval threshold",
+      "timeout": 10
+    },
+    {
+      "id": "request_manual_approval",
+      "type": "action",
+      "label": "Request manual approval for high amount",
+      "executor": "cached",
+      "prompt": "Request manual approval for high amount",
+      "timeout": 30
+    },
+    {
+      "id": "save_invoice_record",
+      "type": "action",
+      "label": "Save invoice to database",
+      "executor": "cached",
+      "prompt": "Save invoice to database",
+      "timeout": 60
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "label": "End"
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "read_email_and_extract_attachments"
+    },
+    {
+      "from": "read_email_and_extract_attachments",
+      "to": "has_pdf_decision"
+    },
+    {
+      "from": "has_pdf_decision",
+      "to": "notify_missing_attachment",
+      "condition": "false"
+    },
+    {
+      "from": "has_pdf_decision",
+      "to": "extract_document_text",
+      "condition": "true"
+    },
+    {
+      "from": "notify_missing_attachment",
+      "to": "end"
+    },
+    {
+      "from": "extract_document_text",
+      "to": "parse_invoice_amount"
+    },
+    {
+      "from": "parse_invoice_amount",
+      "to": "check_approval_threshold"
+    },
+    {
+      "from": "check_approval_threshold",
+      "to": "request_manual_approval",
+      "condition": "true"
+    },
+    {
+      "from": "check_approval_threshold",
+      "to": "save_invoice_record",
+      "condition": "false"
+    },
+    {
+      "from": "request_manual_approval",
+      "to": "end"
+    },
+    {
+      "from": "save_invoice_record",
+      "to": "end"
+    }
+  ]
+}

@@ -153,15 +153,24 @@ class OpenAIProvider(ModelProvider):
             for iteration in range(max_tool_iterations):
                 logger.info(f"🔄 Tool calling iteration {iteration + 1}/{max_tool_iterations}")
 
+                # Build API parameters
+                # GPT-5 uses max_completion_tokens instead of max_tokens
+                api_params = {
+                    "model": self.model_config["api_name"],
+                    "messages": messages,
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "temperature": 0.2,
+                }
+
+                # Use max_completion_tokens for GPT-5 models, max_tokens for others
+                if self.model_name.startswith("gpt-5"):
+                    api_params["max_completion_tokens"] = 2000
+                else:
+                    api_params["max_tokens"] = 2000
+
                 # Call OpenAI
-                response = self.client.chat.completions.create(
-                    model=self.model_config["api_name"],
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    temperature=0.2,
-                    max_tokens=2000
-                )
+                response = self.client.chat.completions.create(**api_params)
 
                 message = response.choices[0].message
 
@@ -442,16 +451,25 @@ class OpenAIProvider(ModelProvider):
         import asyncio
 
         try:
+            # Build API parameters
+            # GPT-5 uses max_completion_tokens instead of max_tokens
+            api_params = {
+                "model": self.model_config["api_name"],
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
+            }
+
+            # Use max_completion_tokens for GPT-5 models, max_tokens for others
+            if self.model_name.startswith("gpt-5"):
+                api_params["max_completion_tokens"] = max_tokens
+            else:
+                api_params["max_tokens"] = max_tokens
+
             # Run synchronous OpenAI call in executor (v1.x SDK is sync)
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model_config["api_name"],
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
+                lambda: self.client.chat.completions.create(**api_params)
             )
 
             return response.choices[0].message.content
