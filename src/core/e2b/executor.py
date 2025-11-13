@@ -19,9 +19,19 @@ class E2BExecutor:
     def __init__(self, api_key: Optional[str] = None):
         """
         Args:
-            api_key: E2B API key (opcional, usa env var E2B_API_KEY si no se proporciona)
+            api_key: DEPRECATED - AsyncSandbox reads E2B_API_KEY from environment automatically.
+                     This parameter is kept for backwards compatibility but is not used.
+
+        Note:
+            Ensure E2B_API_KEY environment variable is set in your deployment environment.
         """
-        self.api_key = api_key
+        # Note: api_key parameter is deprecated and not used
+        # AsyncSandbox reads from E2B_API_KEY environment variable automatically
+        if api_key:
+            logger.warning(
+                "api_key parameter is deprecated. AsyncSandbox reads E2B_API_KEY from environment. "
+                "This parameter will be removed in a future version."
+            )
 
     async def execute_code(
         self,
@@ -50,7 +60,8 @@ class E2BExecutor:
             logger.info(f"Ejecutando código en E2B (timeout: {timeout}s)...")
 
             # Ejecutar en E2B
-            async with AsyncSandbox(api_key=self.api_key, timeout=timeout) as sandbox:
+            # Note: AsyncSandbox reads E2B_API_KEY from environment automatically
+            async with AsyncSandbox(timeout=timeout) as sandbox:
                 execution = await sandbox.run_code(full_code)
 
                 # Revisar errores
