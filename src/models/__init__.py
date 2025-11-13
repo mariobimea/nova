@@ -30,5 +30,6 @@ def get_db():
 from .workflow import Workflow
 from .execution import Execution
 from .chain_of_work import ChainOfWork
+from .chain_of_work_step import ChainOfWorkStep
 
-__all__ = ["Base", "engine", "SessionLocal", "get_db", "Workflow", "Execution", "ChainOfWork"]
+__all__ = ["Base", "engine", "SessionLocal", "get_db", "Workflow", "Execution", "ChainOfWork", "ChainOfWorkStep"]

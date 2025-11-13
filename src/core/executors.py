@@ -125,6 +125,7 @@ class CachedExecutor(ExecutorStrategy):
         from .agents import MultiAgentOrchestrator, InputAnalyzerAgent, DataAnalyzerAgent
         from .agents import CodeGeneratorAgent, CodeValidatorAgent, OutputValidatorAgent
         from .e2b.executor import E2BExecutor as AgentE2BExecutor
+        from .integrations.rag_client import RAGClient
 
         # Store db_session for future cache implementation (Phase 2)
         self.db_session = db_session
@@ -147,10 +148,22 @@ class CachedExecutor(ExecutorStrategy):
             template=template_id
         )
 
+        # Initialize RAG client (optional - for doc search)
+        rag_client = None
+        rag_url = os.getenv("RAG_SERVICE_URL")
+        if rag_url:
+            try:
+                rag_client = RAGClient(base_url=rag_url)
+                logger.info(f"RAGClient initialized with URL: {rag_url}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RAGClient: {e}. Tool calling will be disabled.")
+        else:
+            logger.warning("RAG_SERVICE_URL not set. Tool calling for doc search will be disabled.")
+
         # Initialize all agents
         input_analyzer = InputAnalyzerAgent(openai_client)
         data_analyzer = DataAnalyzerAgent(openai_client, e2b_executor)
-        code_generator = CodeGeneratorAgent(openai_client)
+        code_generator = CodeGeneratorAgent(openai_client, rag_client)  # Pass RAG client
         code_validator = CodeValidatorAgent()
         output_validator = OutputValidatorAgent(openai_client)
 

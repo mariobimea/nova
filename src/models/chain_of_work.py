@@ -73,5 +73,13 @@ class ChainOfWork(Base):
     # Relationship to execution
     execution = relationship("Execution", back_populates="chain_of_work")
 
+    # Relationship to steps (NEW - granular agent execution trace)
+    steps = relationship(
+        "ChainOfWorkStep",
+        back_populates="chain_of_work",
+        cascade="all, delete-orphan",
+        order_by="ChainOfWorkStep.step_number, ChainOfWorkStep.attempt_number"
+    )
+
     def __repr__(self):
         return f"<ChainOfWork(id={self.id}, execution_id={self.execution_id}, node_id='{self.node_id}', status='{self.status}')>"

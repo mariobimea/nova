@@ -18,33 +18,54 @@ from openai import AsyncOpenAI
 
 from .base import BaseAgent, AgentResponse
 from .state import ContextState
+from ..integrations.rag_client import RAGClient
 
 
 class CodeGeneratorAgent(BaseAgent):
     """Genera código Python ejecutable usando IA"""
 
-    def __init__(self, openai_client: AsyncOpenAI):
+    def __init__(self, openai_client: AsyncOpenAI, rag_client: Optional[RAGClient] = None):
         super().__init__("CodeGenerator")
         self.client = openai_client
         self.model = "gpt-4o"  # Modelo inteligente
+        self.rag_client = rag_client  # Optional RAG client for doc search
 
-        # Definir tools para búsqueda de docs
+        # Definir tools para búsqueda de docs via RAG
         self.tools = [
             {
                 "type": "function",
                 "function": {
                     "name": "search_documentation",
-                    "description": "Busca documentación oficial de librerías Python",
+                    "description": (
+                        "Busca documentación oficial de librerías Python en la base de conocimiento. "
+                        "Usa esto cuando necesites ejemplos de código, sintaxis, o mejores prácticas para "
+                        "librerías como PyMuPDF, EasyOCR, pandas, etc."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "library": {
                                 "type": "string",
-                                "description": "Nombre de la librería (ej: 'pymupdf', 'pandas')"
+                                "description": (
+                                    "Nombre de la librería a buscar. "
+                                    "Valores disponibles: 'pymupdf', 'easyocr', 'email', 'gmail'"
+                                ),
+                                "enum": ["pymupdf", "easyocr", "email", "gmail"]
                             },
                             "query": {
                                 "type": "string",
-                                "description": "Qué buscar en la documentación"
+                                "description": (
+                                    "Qué buscar en la documentación (en inglés). "
+                                    "Ejemplos: 'extract text from PDF', 'read invoice data', "
+                                    "'OCR from image', 'send email with attachment'"
+                                )
+                            },
+                            "top_k": {
+                                "type": "integer",
+                                "description": "Número de ejemplos a retornar (1-5)",
+                                "default": 3,
+                                "minimum": 1,
+                                "maximum": 5
                             }
                         },
                         "required": ["library", "query"]
@@ -219,7 +240,7 @@ Si necesitas documentación de alguna librería, puedes usar search_documentatio
 
     async def _handle_tool_calls(self, tool_calls) -> str:
         """
-        Ejecuta las tool calls para buscar documentación.
+        Ejecuta las tool calls para buscar documentación via RAG.
 
         Retorna: String con la documentación encontrada
         """
@@ -230,24 +251,58 @@ Si necesitas documentación de alguna librería, puedes usar search_documentatio
                 args = json.loads(tool_call.function.arguments)
                 library = args.get("library")
                 query = args.get("query")
+                top_k = args.get("top_k", 3)  # Default: 3 results
 
-                self.logger.info(f"Buscando docs de {library}: {query}")
+                self.logger.info(f"🔍 Buscando docs de {library}: '{query}' (top_k={top_k})")
 
-                # Aquí integraríamos con Context7 MCP
-                # Por ahora, mock básico
-                doc = await self._search_docs(library, query)
-                docs.append(f"# {library} - {query}\n{doc}")
+                # Buscar documentación en RAG
+                doc = await self._search_docs(library, query, top_k)
+                docs.append(f"# Documentación de {library} - {query}\n\n{doc}")
 
         return "\n\n".join(docs)
 
-    async def _search_docs(self, library: str, query: str) -> str:
+    async def _search_docs(self, library: str, query: str, top_k: int = 3) -> str:
         """
-        Busca documentación usando Context7 MCP.
+        Busca documentación usando nova-rag service.
 
-        TODO: Integrar con MCP real
+        Args:
+            library: Librería a buscar (pymupdf, easyocr, etc.)
+            query: Qué buscar
+            top_k: Número de resultados (default: 3)
+
+        Returns:
+            Documentación formateada para el LLM
         """
-        # Mock básico - en producción, usar Context7
-        return f"Documentación de {library} sobre {query}: [mock - integrar con Context7]"
+        if not self.rag_client:
+            self.logger.warning("RAGClient not available, skipping doc search")
+            return f"[Documentación de {library} no disponible - RAG client no configurado]"
+
+        try:
+            # Buscar en RAG
+            results = await self.rag_client.search(
+                query=query,
+                library=library,
+                top_k=top_k
+            )
+
+            if not results:
+                return f"[No se encontró documentación para {library} sobre '{query}']"
+
+            # Formatear resultados para el LLM
+            formatted_docs = []
+            for i, result in enumerate(results, 1):
+                score_pct = result['score'] * 100
+                formatted_docs.append(
+                    f"### Ejemplo {i} (relevancia: {score_pct:.0f}%)\n"
+                    f"Fuente: {result['source']} - {result['topic']}\n\n"
+                    f"{result['text']}\n"
+                )
+
+            return "\n".join(formatted_docs)
+
+        except Exception as e:
+            self.logger.error(f"Error buscando docs en RAG: {e}")
+            return f"[Error buscando documentación de {library}: {str(e)}]"
 
     async def _regenerate_with_docs(self, original_prompt: str, docs: str):
         """Regenera código con la documentación encontrada"""

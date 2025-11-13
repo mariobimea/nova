@@ -535,6 +535,13 @@ class GraphEngine:
                 # Persist to ChainOfWork if db_session is available
                 if self.db_session and execution:
                     from ..models.chain_of_work import ChainOfWork
+                    from ..models.chain_of_work_step import ChainOfWorkStep
+
+                    # Extraer steps si existen (solo CachedExecutor los genera)
+                    ai_metadata = metadata.get('ai_metadata', {}) or {}
+                    steps_to_persist = ai_metadata.pop('_steps', [])  # Extraer y remover de ai_metadata
+
+                    # 1. Crear entrada principal en ChainOfWork
                     chain_entry = ChainOfWork(
                         execution_id=execution.id,
                         node_id=metadata['node_id'],
@@ -547,11 +554,48 @@ class GraphEngine:
                         error_message=metadata.get('error_message'),
                         decision_result=metadata.get('decision_result'),
                         path_taken=metadata.get('path_taken'),
-                        ai_metadata=metadata.get('ai_metadata'),  # NEW: AI generation metadata
+                        ai_metadata=ai_metadata,  # Sin _steps
                         timestamp=datetime.utcnow()
                     )
                     self.db_session.add(chain_entry)
+                    self.db_session.flush()  # Para obtener chain_entry.id
+
+                    # 2. Crear entradas en ChainOfWorkSteps (si existen)
+                    if steps_to_persist:
+                        logger.info(f"💾 Guardando {len(steps_to_persist)} steps en ChainOfWorkSteps")
+
+                        step_entries = []
+                        for step_data in steps_to_persist:
+                            step_entry = ChainOfWorkStep(
+                                chain_of_work_id=chain_entry.id,
+                                step_number=step_data['step_number'],
+                                step_name=step_data['step_name'],
+                                agent_name=step_data['agent_name'],
+                                attempt_number=step_data['attempt_number'],
+                                input_data=step_data.get('input_data'),
+                                output_data=step_data.get('output_data'),
+                                generated_code=step_data.get('generated_code'),
+                                sandbox_id=step_data.get('sandbox_id'),
+                                model_used=step_data.get('model_used'),
+                                tokens_input=step_data.get('tokens_input'),
+                                tokens_output=step_data.get('tokens_output'),
+                                cost_usd=step_data.get('cost_usd'),
+                                tool_calls=step_data.get('tool_calls'),
+                                status=step_data['status'],
+                                error_message=step_data.get('error_message'),
+                                execution_time_ms=step_data['execution_time_ms'],
+                                timestamp=step_data['timestamp']
+                            )
+                            step_entries.append(step_entry)
+
+                        self.db_session.add_all(step_entries)
+
+                    # 3. Commit todo junto
                     self.db_session.commit()
+
+                    logger.info(
+                        f"✅ ChainOfWork guardado: 1 nodo + {len(steps_to_persist)} steps"
+                    )
 
             except GraphExecutionError as e:
                 logger.error(f"Workflow execution failed at node {current_node_id}: {e}")
@@ -611,6 +655,12 @@ class GraphEngine:
                 # Persist failed node to ChainOfWork
                 if self.db_session and execution:
                     from ..models.chain_of_work import ChainOfWork
+                    from ..models.chain_of_work_step import ChainOfWorkStep
+
+                    # Extraer steps si existen (para nodos fallidos también)
+                    ai_metadata_failed = failed_metadata.get('ai_metadata', {}) or {}
+                    steps_to_persist_failed = ai_metadata_failed.pop('_steps', [])
+
                     chain_entry = ChainOfWork(
                         execution_id=execution.id,
                         node_id=failed_metadata['node_id'],
@@ -623,10 +673,41 @@ class GraphEngine:
                         error_message=failed_metadata.get('error_message'),
                         decision_result=failed_metadata.get('decision_result'),
                         path_taken=failed_metadata.get('path_taken'),
-                        ai_metadata=failed_metadata.get('ai_metadata'),  # ✅ Includes all generation attempts if AI executor
+                        ai_metadata=ai_metadata_failed,  # Sin _steps
                         timestamp=datetime.utcnow()
                     )
                     self.db_session.add(chain_entry)
+                    self.db_session.flush()  # Para obtener chain_entry.id
+
+                    # Persistir steps del nodo fallido (si existen)
+                    if steps_to_persist_failed:
+                        logger.info(f"💾 Guardando {len(steps_to_persist_failed)} steps del nodo fallido")
+
+                        step_entries = []
+                        for step_data in steps_to_persist_failed:
+                            step_entry = ChainOfWorkStep(
+                                chain_of_work_id=chain_entry.id,
+                                step_number=step_data['step_number'],
+                                step_name=step_data['step_name'],
+                                agent_name=step_data['agent_name'],
+                                attempt_number=step_data['attempt_number'],
+                                input_data=step_data.get('input_data'),
+                                output_data=step_data.get('output_data'),
+                                generated_code=step_data.get('generated_code'),
+                                sandbox_id=step_data.get('sandbox_id'),
+                                model_used=step_data.get('model_used'),
+                                tokens_input=step_data.get('tokens_input'),
+                                tokens_output=step_data.get('tokens_output'),
+                                cost_usd=step_data.get('cost_usd'),
+                                tool_calls=step_data.get('tool_calls'),
+                                status=step_data['status'],
+                                error_message=step_data.get('error_message'),
+                                execution_time_ms=step_data['execution_time_ms'],
+                                timestamp=step_data['timestamp']
+                            )
+                            step_entries.append(step_entry)
+
+                        self.db_session.add_all(step_entries)
 
                     # Update Execution status
                     execution.status = 'failed'
