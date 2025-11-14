@@ -78,7 +78,7 @@ class ChainOfWork(Base):
         "ChainOfWorkStep",
         back_populates="chain_of_work",
         cascade="all, delete-orphan",
-        order_by="ChainOfWorkStep.step_number, ChainOfWorkStep.attempt_number"
+        order_by="(ChainOfWorkStep.step_number, ChainOfWorkStep.attempt_number)"
     )
 
     def __repr__(self):
