@@ -293,27 +293,49 @@ if has_pdf:
 else:
     context['branch_decision'] = 'false'
 
-# Imprimir contexto actualizado
-print(json.dumps(context, ensure_ascii=False, indent=2))
+# IMPORTANTE: Imprimir SOLO los cambios realizados, no todo el contexto
+# Esto evita sobrescribir datos existentes que no cambiaron
+context_updates = {
+    'branch_decision': context['branch_decision']
+    # Solo incluye las keys que modificaste
+}
+print(json.dumps({
+    "status": "success",
+    "context_updates": context_updates
+}, ensure_ascii=False, indent=2))
 ```
 
-⚠️ **CRÍTICO:** El código DEBE establecer `context['branch_decision']` o fallará.
-Los valores típicos son: 'true', 'false', 'yes', 'no', 'approved', 'rejected', etc.
+⚠️ **CRÍTICO:**
+- El código DEBE establecer `context['branch_decision']` o fallará
+- Los valores típicos son: 'true', 'false', 'yes', 'no', 'approved', 'rejected', etc.
+- ⚠️ SOLO imprime las keys que MODIFICASTE, NO todo el contexto
 """
         else:
             # Standard instructions for ActionNode
             prompt += """
 **IMPORTANTE - EL CÓDIGO DEBE IMPRIMIR OUTPUT:**
-Tu código DEBE terminar imprimiendo los resultados actualizados del contexto.
+Tu código DEBE terminar imprimiendo SOLO los cambios realizados al contexto.
 Al final del código, SIEMPRE incluye:
 
 ```python
-# Al final de tu código, SIEMPRE imprime el contexto actualizado
-print(json.dumps(context, ensure_ascii=False, indent=2))
+# Al final de tu código, crea un dict con SOLO las keys que modificaste
+context_updates = {
+    'new_key': new_value,
+    'another_key': another_value
+    # Solo incluye las keys que agregaste o modificaste
+}
+
+# Imprime en formato estructurado
+print(json.dumps({
+    "status": "success",
+    "context_updates": context_updates
+}, ensure_ascii=False, indent=2))
 ```
 
-⚠️ SIN este print final, el código se considerará INVÁLIDO.
-El print debe mostrar TODO el contexto (incluyendo las keys que agregaste).
+⚠️ **CRÍTICO:**
+- SIN este print final, el código se considerará INVÁLIDO
+- SOLO imprime las keys que MODIFICASTE, NO todo el contexto
+- Esto preserva datos existentes que no cambiaron (ej: archivos PDF en base64)
 """
 
         # Common instructions for all node types
