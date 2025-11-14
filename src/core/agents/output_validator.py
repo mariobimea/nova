@@ -142,29 +142,29 @@ class OutputValidatorAgent(BaseAgent):
         changes: list,
         generated_code: str = None
     ) -> str:
-        """Construye el prompt para validación"""
+        """Construye el prompt para validación CON CONTEXTO COMPLETO"""
 
-        # Preparar contextos de forma compacta
-        before_summary = self._summarize_context(context_before)
-        after_summary = self._summarize_context(context_after)
+        # Usar contexto compacto (no resumen agresivo)
+        before_compact = self._compact_context(context_before, max_str_length=2000)
+        after_compact = self._compact_context(context_after, max_str_length=2000)
 
         prompt = f"""Tu trabajo: Validar si la tarea se completó correctamente después de ejecutar el código.
 
 **Tarea solicitada:** {task}
 
 **Contexto ANTES de ejecutar:**
-{json.dumps(before_summary, indent=2)}
+{json.dumps(before_compact, indent=2, ensure_ascii=False)}
 
 **Contexto DESPUÉS de ejecutar:**
-{json.dumps(after_summary, indent=2)}
+{json.dumps(after_compact, indent=2, ensure_ascii=False)}
 
 **Cambios detectados:** {changes if changes else "Ninguno"}
 """
 
         # Agregar código generado si está disponible (para mejor contexto)
         if generated_code:
-            # Truncar código si es muy largo (max 800 chars para el prompt)
-            code_preview = generated_code[:800] + "..." if len(generated_code) > 800 else generated_code
+            # Truncar código si es muy largo (max 1500 chars para el prompt)
+            code_preview = generated_code[:1500] + "\n... [TRUNCATED]" if len(generated_code) > 1500 else generated_code
             prompt += f"""
 **Código que se ejecutó:**
 ```python
@@ -182,23 +182,31 @@ Devuelve JSON:
 🔴 Es INVÁLIDO si:
 1. **No hay cambios** → El contexto no se modificó (nada agregado/actualizado)
 2. **Valores vacíos** → Se agregaron keys pero están vacías ("", null, [], {}, 0 cuando debería haber un valor)
-3. **Errores silenciosos** → Hay keys como "error", "failed", "exception" con mensajes de error
+3. **Errores REALES** → Hay keys "error"/"exception" con fallos REALES (crashes, timeouts)
 4. **Tarea incompleta** → La tarea pedía X pero solo se hizo Y (ej: pidió "total" pero solo agregó "currency")
 5. **Valores sin sentido** → Los valores agregados no tienen relación con la tarea
-6. **Código falló silenciosamente** → El código corrió pero no hizo lo que debía hacer
+6. **Código falló** → El código crasheó o no hizo nada útil
 
 🟢 Es VÁLIDO si:
 1. **Cambios relevantes** → Se agregaron o modificaron datos importantes
 2. **Valores correctos** → Los valores agregados tienen sentido para la tarea
 3. **Tarea completada** → Todo lo que se pidió en la tarea está en el contexto
-4. **Sin errores** → No hay keys de error en el contexto actualizado
+4. **Sin errores reales** → No hay crashes ni fallos de ejecución
+
+⚠️ CASOS ESPECIALES:
+- Si hay context['error'] pero es INFORMATIVO (ej: "No unread emails found"),
+  evalúa si eso es un resultado LEGÍTIMO según la tarea
+- Distingue "código falló" (crash/timeout) vs "código funcionó pero no había datos"
+- Un mensaje descriptivo puede ser válido si explica por qué no hay datos disponibles
+- Si la tarea era "leer email" y no había emails, el error informativo es VÁLIDO
 
 **IMPORTANTE:**
 - Sé CRÍTICO: Si algo falta o está mal, márcalo como inválido
 - Compara la TAREA con el RESULTADO (no solo que haya cambios)
 - Si el código corrió pero no hizo nada útil → INVÁLIDO
 - Si falta información que se pidió → INVÁLIDO
-- Si hay un error aunque sea pequeño → INVÁLIDO
+- Si hay un error REAL (crash/exception) → INVÁLIDO
+- Si hay un error INFORMATIVO pero completó la tarea → VÁLIDO
 
 **Tu reason debe explicar**:
 - ¿Qué se esperaba según la tarea?
@@ -208,19 +216,94 @@ Devuelve JSON:
 """
         return prompt
 
-    def _summarize_context(self, context: Dict) -> Dict:
-        """Resume el contexto para el prompt (evita enviar data muy grande)"""
-        summary = {}
+    def _compact_context(self, context: Dict, max_str_length: int = 2000) -> Dict:
+        """
+        Compacta el contexto para el prompt SIN perder información estructural.
+
+        Reglas:
+        - Strings cortos (<2000 chars): enviar completos
+        - Strings largos (>2000 chars): truncar mostrando inicio + "..."
+        - Dicts/Lists: enviar estructura completa (sin resumir a "<dict with X items>")
+        - PDFs/Binarios: mostrar metadata (path, size) no contenido
+
+        Args:
+            context: Contexto a compactar
+            max_str_length: Longitud máxima para strings antes de truncar
+
+        Returns:
+            Contexto compactado pero con estructura real visible
+        """
+        compact = {}
 
         for key, value in context.items():
+            # CASO 1: Strings
             if isinstance(value, str):
-                if len(value) > 100:
-                    summary[key] = f"<string length={len(value)}>"
+                if len(value) > max_str_length:
+                    # Truncar pero mostrar inicio + metadata
+                    compact[key] = f"{value[:max_str_length]}... [TRUNCATED - total {len(value)} chars]"
                 else:
-                    summary[key] = value
-            elif isinstance(value, (list, dict)):
-                summary[key] = f"<{type(value).__name__} with {len(value)} items>"
-            else:
-                summary[key] = value
+                    # String corto, enviar completo
+                    compact[key] = value
 
-        return summary
+            # CASO 2: Dicts (mostrar estructura completa)
+            elif isinstance(value, dict):
+                if len(value) == 0:
+                    compact[key] = {}
+                else:
+                    # Recursión para compactar valores internos
+                    compact[key] = {
+                        k: self._compact_value(v, max_str_length)
+                        for k, v in value.items()
+                    }
+
+            # CASO 3: Lists (mostrar elementos reales)
+            elif isinstance(value, list):
+                if len(value) == 0:
+                    compact[key] = []
+                else:
+                    # Compactar cada elemento
+                    compact[key] = [
+                        self._compact_value(item, max_str_length)
+                        for item in value
+                    ]
+
+            # CASO 4: Otros tipos (int, float, bool, None)
+            else:
+                compact[key] = value
+
+        return compact
+
+    def _compact_value(self, value, max_str_length: int = 2000):
+        """
+        Compacta un valor individual (para usar en recursión).
+        Límite de recursión para evitar explosión de tokens.
+        """
+        if isinstance(value, str):
+            if len(value) > max_str_length:
+                return f"{value[:max_str_length]}... [TRUNCATED - {len(value)} chars]"
+            return value
+
+        elif isinstance(value, dict):
+            if len(value) == 0:
+                return {}
+            # Recursión limitada (valores internos más cortos)
+            return {
+                k: (v if not isinstance(v, (dict, list, str))
+                    else self._compact_value(v, max_str_length=500))
+                for k, v in value.items()
+            }
+
+        elif isinstance(value, list):
+            if len(value) == 0:
+                return []
+            # Si la lista es muy larga (>20 items), mostrar primeros 10 + últimos 5
+            if len(value) > 20:
+                return [
+                    *[self._compact_value(v, 500) for v in value[:10]],
+                    f"... [{len(value) - 15} more items] ...",
+                    *[self._compact_value(v, 500) for v in value[-5:]]
+                ]
+            return [self._compact_value(v, max_str_length=500) for v in value]
+
+        else:
+            return value
