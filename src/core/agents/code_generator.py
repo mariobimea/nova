@@ -244,6 +244,9 @@ class CodeGeneratorAgent(BaseAgent):
 5. El código debe ser autocontenido
 6. DEFINE todas las variables antes de usarlas
 7. Maneja errores con try/except cuando sea necesario
+8. **ARCHIVOS BINARIOS:** Los archivos NO persisten entre nodos (cada nodo ejecuta en sandbox aislado).
+   - Para GUARDAR archivos: encode con base64 → context['file_data'] = base64.b64encode(bytes).decode()
+   - Para LEER archivos: decode → bytes = base64.b64decode(context['file_data'])
 
 **IMPORTANTE - EL CÓDIGO DEBE IMPRIMIR OUTPUT:**
 Tu código DEBE terminar imprimiendo los resultados actualizados del contexto.
