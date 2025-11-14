@@ -172,8 +172,8 @@ context = json.loads('''{context_json}''')
         También soporta formato legacy donde se imprime el contexto completo.
         """
         if not stdout:
-            logger.warning("No stdout from E2B execution, retornando context original")
-            return original_context
+            logger.warning("No stdout from E2B execution, no hay updates")
+            return {}  # Return empty dict when no stdout
 
         # Buscar JSON en stdout (puede estar en cualquier línea)
         for line in stdout.split('\n'):
@@ -190,14 +190,10 @@ context = json.loads('''{context_json}''')
                 if isinstance(output_json, dict) and "context_updates" in output_json:
                     context_updates = output_json.get("context_updates", {})
 
-                    # CRITICAL: MERGE context_updates with original_context
-                    # This preserves data that wasn't modified (e.g., pdf_data)
-                    updated_context = original_context.copy()
-                    updated_context.update(context_updates)
-
-                    logger.debug(f"Context updates aplicados: {list(context_updates.keys())}")
-                    logger.debug(f"Context final tiene {len(updated_context)} keys")
-                    return updated_context
+                    # IMPORTANT: Return ONLY the updates, not the full merged context
+                    # The orchestrator will handle the merging
+                    logger.debug(f"Context updates extraídos: {list(context_updates.keys())}")
+                    return context_updates
 
                 # Formato legacy: todo el contexto directamente
                 # {"email_from": "...", "email_subject": "...", ...}
@@ -209,7 +205,7 @@ context = json.loads('''{context_json}''')
                 # Esta línea no es JSON válido, continuar con la siguiente
                 continue
 
-        # Si no encontramos JSON válido, retornar original
-        logger.warning("No se encontró JSON válido en stdout, retornando context original")
+        # Si no encontramos JSON válido, retornar diccionario vacío (sin updates)
+        logger.warning("No se encontró JSON válido en stdout, no hay updates")
         logger.debug(f"Stdout recibido:\n{stdout[:500]}...")
-        return original_context
+        return {}  # Return empty dict, not original context
