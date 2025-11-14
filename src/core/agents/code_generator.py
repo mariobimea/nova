@@ -237,8 +237,12 @@ class CodeGeneratorAgent(BaseAgent):
 
 **Tarea:** {task}
 
-**Contexto disponible:**
+**Contexto disponible (variable 'context'):**
+La variable `context` es un diccionario que YA EXISTE con estas keys:
 {json.dumps(context_schema, indent=2)}
+
+⚠️ IMPORTANTE: Este es solo el ESQUEMA del contexto (valores resumidos).
+NO copies estos valores al código. Usa `context['key']` para acceder a los valores reales.
 """
 
         # Agregar insights si existen
@@ -257,14 +261,16 @@ class CodeGeneratorAgent(BaseAgent):
 
         prompt += """
 **Reglas importantes:**
-1. Accede al contexto así: `value = context['key']`
-2. Actualiza el contexto agregando nuevas keys: `context['new_key'] = result`
-3. NO uses variables globales
-4. Importa solo librerías disponibles (PyMuPDF/fitz, pandas, PIL, email, json, csv, re)
-5. El código debe ser autocontenido
-6. DEFINE todas las variables antes de usarlas
-7. Maneja errores con try/except cuando sea necesario
-8. **ARCHIVOS BINARIOS:** Los archivos NO persisten entre nodos (cada nodo ejecuta en sandbox aislado).
+1. El diccionario `context` YA EXISTE - NO lo definas ni lo sobrescribas
+2. Accede al contexto así: `value = context['key']` o `value = context.get('key')`
+3. Actualiza el contexto agregando nuevas keys: `context['new_key'] = result`
+4. ⚠️ **NUNCA** escribas `context = {...}` - el contexto ya está disponible
+5. NO uses variables globales
+6. Importa solo librerías disponibles (PyMuPDF/fitz, pandas, PIL, email, json, csv, re)
+7. El código debe ser autocontenido
+8. DEFINE todas las variables antes de usarlas
+9. Maneja errores con try/except cuando sea necesario
+10. **ARCHIVOS BINARIOS:** Los archivos NO persisten entre nodos (cada nodo ejecuta en sandbox aislado).
    - Para GUARDAR archivos: encode con base64 → context['file_data'] = base64.b64encode(bytes).decode()
    - Para LEER archivos: decode → bytes = base64.b64decode(context['file_data'])
 """
