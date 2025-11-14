@@ -243,10 +243,9 @@ class OpenAIProvider(ModelProvider):
                         if function_name == "search_documentation":
                             # Execute search
                             result = execute_search_documentation(
-                                vector_store=knowledge_manager.vector_store if knowledge_manager else None,
+                                rag_client=knowledge_manager.rag_client if knowledge_manager else None,
                                 query=arguments.get("query"),
-                                source=arguments.get("source"),
-                                top_k=arguments.get("top_k", 3)
+                                top_k=arguments.get("top_k", 5)
                             )
 
                             # Track tool call

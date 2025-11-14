@@ -16,11 +16,14 @@ def get_search_documentation_tool() -> Dict[str, Any]:
     Returns OpenAI function calling definition for search_documentation tool.
 
     This tool allows the AI to search the RAG service (nova-rag) for relevant documentation
-    during code generation. The AI can:
-    - Search for specific API patterns
-    - Filter by integration/library
+    during code generation using semantic similarity. The AI can:
+    - Search with natural language queries
+    - Get the most relevant results automatically (no manual filtering needed)
     - Request multiple results
-    - Make multiple searches iteratively
+    - Make multiple searches iteratively to gather more context
+
+    The RAG service uses vector embeddings to find semantically similar documentation
+    across all integrations (PyMuPDF, EasyOCR, IMAP, SMTP, PostgreSQL, Regex, etc.)
 
     Returns:
         Tool definition dict compatible with OpenAI chat.completions API
@@ -31,9 +34,8 @@ def get_search_documentation_tool() -> Dict[str, Any]:
                 "function": {
                     "name": "search_documentation",
                     "arguments": {
-                        "query": "open PDF from base64 bytes",
-                        "source": "pymupdf",
-                        "top_k": 3
+                        "query": "read unread emails with PDF attachments",
+                        "top_k": 5
                     }
                 }
             }]
@@ -46,13 +48,13 @@ def get_search_documentation_tool() -> Dict[str, Any]:
             "description": (
                 "Search NOVA's integration documentation for code examples, API references, "
                 "and usage patterns. Use this to find information about:\n"
-                "- PyMuPDF (pymupdf): PDF text extraction, form parsing\n"
-                "- EasyOCR (easyocr): Optical character recognition for scanned documents\n"
-                "- IMAP (imap): Reading emails from inbox\n"
-                "- SMTP (smtp): Sending emails\n"
-                "- PostgreSQL (postgres): Database operations\n"
-                "- Regex (regex): Pattern matching and text extraction\n\n"
-                "Returns relevant code snippets and documentation chunks."
+                "- PDF processing: PyMuPDF for text extraction, form parsing\n"
+                "- OCR: EasyOCR for optical character recognition on scanned documents\n"
+                "- Email: IMAP for reading emails, SMTP for sending emails\n"
+                "- Database: PostgreSQL operations and queries\n"
+                "- Text processing: Regex patterns for data extraction\n\n"
+                "The search uses semantic similarity to find the most relevant documentation "
+                "automatically across all integrations. Just describe what you need in natural language."
             ),
             "parameters": {
                 "type": "object",
@@ -60,28 +62,24 @@ def get_search_documentation_tool() -> Dict[str, Any]:
                     "query": {
                         "type": "string",
                         "description": (
-                            "Search query describing what you need to know. "
-                            "Examples: 'open PDF from base64 bytes', 'extract text with OCR', "
-                            "'send email with attachment', 'regex pattern for invoice numbers'"
-                        )
-                    },
-                    "source": {
-                        "type": "string",
-                        "enum": ["pymupdf", "easyocr", "imap", "smtp", "postgres", "regex"],
-                        "description": (
-                            "Optional: Filter results to specific integration/library. "
-                            "Use this when you know which library you need. "
-                            "If unsure, omit this parameter to search all docs."
+                            "Natural language search query describing what you need. "
+                            "Be specific about the task. Examples:\n"
+                            "- 'open PDF from base64 bytes and extract text'\n"
+                            "- 'extract text from scanned PDF using OCR'\n"
+                            "- 'read unread emails with PDF attachments'\n"
+                            "- 'send email with attachment'\n"
+                            "- 'query PostgreSQL database'\n"
+                            "- 'regex pattern to extract invoice numbers'"
                         )
                     },
                     "top_k": {
                         "type": "integer",
-                        "default": 3,
+                        "default": 5,
                         "minimum": 1,
                         "maximum": 10,
                         "description": (
-                            "Number of documentation chunks to return (default: 3). "
-                            "Use higher values (5-10) for complex tasks requiring more context."
+                            "Number of documentation chunks to return (default: 5). "
+                            "Use higher values (7-10) for complex tasks requiring more context."
                         )
                     }
                 },
@@ -163,8 +161,7 @@ def format_search_results(
 def execute_search_documentation(
     rag_client,
     query: str,
-    source: Optional[str] = None,
-    top_k: int = 3
+    top_k: int = 5
 ) -> str:
     """
     Execute a documentation search via RAG service and return formatted results.
@@ -175,8 +172,7 @@ def execute_search_documentation(
     Args:
         rag_client: RAGClient instance (from get_rag_client())
         query: Search query from AI
-        source: Optional source filter (e.g., "pymupdf")
-        top_k: Number of results to return
+        top_k: Number of results to return (default: 5)
 
     Returns:
         Formatted search results as string
@@ -184,19 +180,14 @@ def execute_search_documentation(
     Raises:
         Exception: If RAG service is unavailable or search fails
     """
-    logger.info(f"AI searching docs via RAG: query='{query}', source={source}, top_k={top_k}")
+    logger.info(f"AI searching docs via RAG: query='{query}', top_k={top_k}")
 
     try:
-        # Build filters
-        filters = {}
-        if source:
-            filters["source"] = source
-
-        # Execute search via RAG service
+        # Execute search via RAG service (no filters - semantic search across all docs)
         results = rag_client.query(
             query=query,
             top_k=top_k,
-            filters=filters if filters else None
+            filters=None
         )
 
         # Format results
