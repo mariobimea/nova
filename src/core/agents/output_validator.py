@@ -164,12 +164,16 @@ class OutputValidatorAgent(BaseAgent):
         # Agregar código generado si está disponible (para mejor contexto)
         if generated_code:
             # Truncar código si es muy largo (max 1500 chars para el prompt)
-            code_preview = generated_code[:1500] + "\n... [TRUNCATED]" if len(generated_code) > 1500 else generated_code
+            code_preview = generated_code[:1500] + "\n... [TRUNCATED FOR BREVITY]" if len(generated_code) > 1500 else generated_code
             prompt += f"""
 **Código que se ejecutó:**
 ```python
 {code_preview}
 ```
+
+⚠️ IMPORTANTE: Si el código muestra "[TRUNCATED FOR BREVITY]", esto es SOLO para ahorrar espacio en este prompt.
+El código COMPLETO se ejecutó exitosamente en el sandbox. NO evalúes basándote en si el código está truncado aquí.
+Evalúa basándote en los CAMBIOS EN EL CONTEXTO (before vs after) y si cumplen con la tarea solicitada.
 """
 
         prompt += """
