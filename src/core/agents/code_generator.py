@@ -171,6 +171,52 @@ class CodeGeneratorAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
+    def _summarize_value(self, value, max_depth=3, current_depth=0):
+        """
+        Recursively summarize values to prevent token overflow.
+        Handles nested dicts, lists, and long strings at any depth.
+        """
+        # Prevent infinite recursion
+        if current_depth >= max_depth:
+            return f"<max depth reached: {type(value).__name__}>"
+
+        if isinstance(value, str):
+            if len(value) > 100:
+                return f"<string: {len(value)} chars>"
+            return value
+
+        elif isinstance(value, (int, float, bool, type(None))):
+            return value
+
+        elif isinstance(value, list):
+            if len(value) == 0:
+                return []
+
+            # Summarize list items recursively
+            summarized_items = []
+            for item in value[:3]:  # Max 3 items
+                summarized_items.append(self._summarize_value(item, max_depth, current_depth + 1))
+
+            if len(value) > 3:
+                summarized_items.append(f"... (+{len(value)-3} more)")
+
+            return summarized_items
+
+        elif isinstance(value, dict):
+            if len(value) == 0:
+                return {}
+
+            # Summarize dict values recursively
+            summarized_dict = {}
+            for k, v in value.items():
+                summarized_dict[k] = self._summarize_value(v, max_depth, current_depth + 1)
+
+            return summarized_dict
+
+        else:
+            # Unknown type
+            return f"<{type(value).__name__}>"
+
     def _build_prompt(
         self,
         task: str,
@@ -182,56 +228,10 @@ class CodeGeneratorAgent(BaseAgent):
         """Construye el prompt para generación de código"""
 
         # Schema del contexto (keys + tipos + valores de ejemplo)
-        # IMPORTANTE: Mostrar los valores reales (no representaciones confusas)
-        # para que el LLM genere código correcto
+        # Use recursive summarization to handle nested structures
         context_schema = {}
         for key, value in context.items():
-            if isinstance(value, str):
-                if len(value) > 100:
-                    # Para strings largos, mostrar solo tipo y longitud
-                    context_schema[key] = f"<string: {len(value)} chars>"
-                else:
-                    # Para strings cortos, mostrar el valor real
-                    context_schema[key] = value
-            elif isinstance(value, (int, float, bool)):
-                # Para números y booleanos, mostrar el valor real
-                context_schema[key] = value
-            elif isinstance(value, list):
-                # Para listas, mostrar estructura resumida
-                if len(value) == 0:
-                    context_schema[key] = []
-                else:
-                    # Resumir elementos de la lista
-                    summarized_items = []
-                    for item in value[:3]:  # Max 3 elementos
-                        if isinstance(item, str) and len(item) > 100:
-                            # String largo en lista (ej: PDF base64): resumir
-                            summarized_items.append(f"<string: {len(item)} chars>")
-                        elif isinstance(item, dict):
-                            # Dict en lista: mostrar keys
-                            summarized_items.append(f"<dict: {list(item.keys())}>" if item else {})
-                        elif isinstance(item, (list, tuple)):
-                            # Lista anidada: mostrar longitud
-                            summarized_items.append(f"<list: {len(item)} items>")
-                        else:
-                            # Valor simple: mostrar tal cual
-                            summarized_items.append(item)
-
-                    # Agregar indicador si hay más elementos
-                    if len(value) > 3:
-                        summarized_items.append(f"... (+{len(value)-3} more)")
-
-                    context_schema[key] = summarized_items
-            elif isinstance(value, dict):
-                # Para diccionarios, mostrar estructura completa si es pequeño
-                if len(value) <= 5:
-                    context_schema[key] = value
-                else:
-                    # Dict grande: mostrar solo las keys
-                    context_schema[key] = f"<dict with keys: {list(value.keys())}>"
-            else:
-                # Para otros tipos (objetos, etc), mostrar tipo
-                context_schema[key] = f"<{type(value).__name__}>"
+            context_schema[key] = self._summarize_value(value)
 
         prompt = f"""Genera código Python que resuelve esta tarea:
 
