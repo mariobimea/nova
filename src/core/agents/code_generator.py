@@ -48,9 +48,10 @@ class CodeGeneratorAgent(BaseAgent):
                                 "type": "string",
                                 "description": (
                                     "Nombre de la librería a buscar. "
-                                    "Valores disponibles: 'pymupdf', 'easyocr', 'email', 'gmail'"
+                                    "Valores disponibles: 'pymupdf', 'easyocr', 'imap', 'smtp', 'postgres', 'regex'. "
+                                    "Para emails: usa 'imap' para leer o 'smtp' para enviar"
                                 ),
-                                "enum": ["pymupdf", "easyocr", "email", "gmail"]
+                                "enum": ["pymupdf", "easyocr", "imap", "smtp", "postgres", "regex"]
                             },
                             "query": {
                                 "type": "string",
