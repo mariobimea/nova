@@ -212,16 +212,40 @@ class CodeValidatorAgent(BaseAgent):
 
     def _check_context_access(self, tree: ast.AST, context: Dict) -> List[str]:
         """
-        Valida que accesos a context usen keys que existen.
+        Valida que accesos a context usen keys que existen o fueron creadas.
 
         Busca patrones como: context['key'] o context.get('key')
+
+        IMPORTANTE: Trackea las keys que el código CREA (Store) antes de validar
+        los accesos (Load), para evitar falsos positivos cuando el código hace:
+
+        context['new_key'] = value  # Crea la key
+        result = context['new_key']  # Accede a la key creada ✅
         """
         errors = []
+        # Empezar con las keys del contexto inicial
         context_keys = set(context.keys())
 
-        class ContextVisitor(ast.NodeVisitor):
+        # PASO 1: Recolectar todas las keys que el código CREA
+        # Esto previene falsos positivos cuando el código crea una key antes de accederla
+        class KeyCollector(ast.NodeVisitor):
             def visit_Subscript(self, node):
-                # Detectar context['key'] - solo validar LECTURA, no escritura
+                # Detectar context['key'] = value (Store = creación/asignación)
+                if isinstance(node.value, ast.Name) and node.value.id == "context":
+                    if isinstance(node.slice, ast.Constant):
+                        key = node.slice.value
+                        # Si es Store (asignación), agregar la key como disponible
+                        if isinstance(node.ctx, ast.Store):
+                            context_keys.add(key)
+                self.generic_visit(node)
+
+        # Primero recolectamos todas las keys creadas
+        KeyCollector().visit(tree)
+
+        # PASO 2: Validar accesos a context DESPUÉS de saber qué keys existen/se crean
+        class ContextAccessValidator(ast.NodeVisitor):
+            def visit_Subscript(self, node):
+                # Detectar context['key'] - solo validar LECTURA
                 if isinstance(node.value, ast.Name) and node.value.id == "context":
                     if isinstance(node.slice, ast.Constant):
                         key = node.slice.value
@@ -229,7 +253,7 @@ class CodeValidatorAgent(BaseAgent):
                         if isinstance(node.ctx, ast.Load) and key not in context_keys:
                             errors.append(
                                 f"Línea {node.lineno}: Acceso a context['{key}'] pero esa key no existe. "
-                                f"Keys disponibles: {list(context_keys)}"
+                                f"Keys disponibles: {sorted(list(context_keys))}"
                             )
                 self.generic_visit(node)
 
@@ -240,7 +264,8 @@ class CodeValidatorAgent(BaseAgent):
                 # Solo validamos context['key'] que sí lanzaría KeyError.
                 self.generic_visit(node)
 
-        ContextVisitor().visit(tree)
+        # Ahora validamos los accesos con el set completo de keys
+        ContextAccessValidator().visit(tree)
         return errors
 
     def _check_imports(self, tree: ast.AST) -> Set[str]:
