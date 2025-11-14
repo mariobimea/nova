@@ -234,17 +234,10 @@ class CodeValidatorAgent(BaseAgent):
                 self.generic_visit(node)
 
             def visit_Call(self, node):
-                # Detectar context.get('key')
-                if isinstance(node.func, ast.Attribute):
-                    if (isinstance(node.func.value, ast.Name) and
-                        node.func.value.id == "context" and
-                        node.func.attr == "get"):
-                        if node.args and isinstance(node.args[0], ast.Constant):
-                            key = node.args[0].value
-                            if key not in context_keys:
-                                errors.append(
-                                    f"Línea {node.lineno}: context.get('{key}') pero esa key no existe"
-                                )
+                # NO validar context.get('key') porque es el método seguro
+                # para acceder a claves que podrían no existir.
+                # context.get('key') devuelve None si no existe, lo cual es válido.
+                # Solo validamos context['key'] que sí lanzaría KeyError.
                 self.generic_visit(node)
 
         ContextVisitor().visit(tree)
