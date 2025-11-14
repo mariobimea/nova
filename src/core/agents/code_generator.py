@@ -197,15 +197,31 @@ class CodeGeneratorAgent(BaseAgent):
                 # Para números y booleanos, mostrar el valor real
                 context_schema[key] = value
             elif isinstance(value, list):
-                # Para listas, mostrar estructura con valores reales
+                # Para listas, mostrar estructura resumida
                 if len(value) == 0:
                     context_schema[key] = []
-                elif len(value) <= 3:
-                    # Lista pequeña: mostrar todos los valores
-                    context_schema[key] = value
                 else:
-                    # Lista grande: mostrar primeros 3 elementos + indicador
-                    context_schema[key] = value[:3] + [f"... (+{len(value)-3} more)"]
+                    # Resumir elementos de la lista
+                    summarized_items = []
+                    for item in value[:3]:  # Max 3 elementos
+                        if isinstance(item, str) and len(item) > 100:
+                            # String largo en lista (ej: PDF base64): resumir
+                            summarized_items.append(f"<string: {len(item)} chars>")
+                        elif isinstance(item, dict):
+                            # Dict en lista: mostrar keys
+                            summarized_items.append(f"<dict: {list(item.keys())}>" if item else {})
+                        elif isinstance(item, (list, tuple)):
+                            # Lista anidada: mostrar longitud
+                            summarized_items.append(f"<list: {len(item)} items>")
+                        else:
+                            # Valor simple: mostrar tal cual
+                            summarized_items.append(item)
+
+                    # Agregar indicador si hay más elementos
+                    if len(value) > 3:
+                        summarized_items.append(f"... (+{len(value)-3} more)")
+
+                    context_schema[key] = summarized_items
             elif isinstance(value, dict):
                 # Para diccionarios, mostrar estructura completa si es pequeño
                 if len(value) <= 5:
