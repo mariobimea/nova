@@ -148,7 +148,7 @@ class OutputValidatorAgent(BaseAgent):
         before_summary = self._summarize_context(context_before)
         after_summary = self._summarize_context(context_after)
 
-        prompt = f"""Valida si esta tarea se completó correctamente.
+        prompt = f"""Tu trabajo: Validar si la tarea se completó correctamente después de ejecutar el código.
 
 **Tarea solicitada:** {task}
 
@@ -163,10 +163,10 @@ class OutputValidatorAgent(BaseAgent):
 
         # Agregar código generado si está disponible (para mejor contexto)
         if generated_code:
-            # Truncar código si es muy largo (max 500 chars para el prompt)
-            code_preview = generated_code[:500] + "..." if len(generated_code) > 500 else generated_code
+            # Truncar código si es muy largo (max 800 chars para el prompt)
+            code_preview = generated_code[:800] + "..." if len(generated_code) > 800 else generated_code
             prompt += f"""
-**Código ejecutado:**
+**Código que se ejecutó:**
 ```python
 {code_preview}
 ```
@@ -176,20 +176,35 @@ class OutputValidatorAgent(BaseAgent):
 Devuelve JSON:
 {
   "valid": true/false,
-  "reason": "Por qué es válido o inválido"
+  "reason": "Explicación detallada de por qué es válido o inválido"
 }
 
-Es INVÁLIDO si:
-- No hay cambios en el contexto (nada se agregó ni modificó)
-- Los valores agregados están vacíos ("", null, [], {})
-- Hay errores disfrazados (ej: {"error": "..."})
-- La tarea NO se completó (ej: pidió "total" pero solo agregó "currency")
-- Los valores agregados no tienen sentido para la tarea
+🔴 Es INVÁLIDO si:
+1. **No hay cambios** → El contexto no se modificó (nada agregado/actualizado)
+2. **Valores vacíos** → Se agregaron keys pero están vacías ("", null, [], {}, 0 cuando debería haber un valor)
+3. **Errores silenciosos** → Hay keys como "error", "failed", "exception" con mensajes de error
+4. **Tarea incompleta** → La tarea pedía X pero solo se hizo Y (ej: pidió "total" pero solo agregó "currency")
+5. **Valores sin sentido** → Los valores agregados no tienen relación con la tarea
+6. **Código falló silenciosamente** → El código corrió pero no hizo lo que debía hacer
 
-Es VÁLIDO si:
-- Se agregaron o modificaron datos relevantes
-- Los valores tienen sentido para la tarea solicitada
-- La tarea se completó según lo pedido
+🟢 Es VÁLIDO si:
+1. **Cambios relevantes** → Se agregaron o modificaron datos importantes
+2. **Valores correctos** → Los valores agregados tienen sentido para la tarea
+3. **Tarea completada** → Todo lo que se pidió en la tarea está en el contexto
+4. **Sin errores** → No hay keys de error en el contexto actualizado
+
+**IMPORTANTE:**
+- Sé CRÍTICO: Si algo falta o está mal, márcalo como inválido
+- Compara la TAREA con el RESULTADO (no solo que haya cambios)
+- Si el código corrió pero no hizo nada útil → INVÁLIDO
+- Si falta información que se pidió → INVÁLIDO
+- Si hay un error aunque sea pequeño → INVÁLIDO
+
+**Tu reason debe explicar**:
+- ¿Qué se esperaba según la tarea?
+- ¿Qué se obtuvo realmente?
+- ¿Por qué es válido/inválido?
+- Si es inválido: ¿Qué está fallando en el código? (insight para retry)
 """
         return prompt
 

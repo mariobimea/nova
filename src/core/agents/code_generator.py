@@ -228,13 +228,28 @@ class CodeGeneratorAgent(BaseAgent):
 6. DEFINE todas las variables antes de usarlas
 7. Maneja errores con try/except cuando sea necesario
 
+**IMPORTANTE - EL CÓDIGO DEBE IMPRIMIR OUTPUT:**
+Tu código DEBE terminar imprimiendo los resultados actualizados del contexto.
+Al final del código, SIEMPRE incluye:
+
+```python
+# Al final de tu código, SIEMPRE imprime el contexto actualizado
+print(json.dumps(context, ensure_ascii=False, indent=2))
+```
+
+⚠️ SIN este print final, el código se considerará INVÁLIDO.
+El print debe mostrar TODO el contexto (incluyendo las keys que agregaste).
+
+**Cuándo usar search_documentation():**
+- Si necesitas sintaxis específica de una librería (ej: "cómo abrir PDF con PyMuPDF")
+- Si no estás seguro de cómo usar una API (ej: "enviar email con SMTP")
+- MÁXIMO 2-3 búsquedas por tarea (no abuses)
+
 **Output esperado:**
 - Retorna SOLO el código Python
 - Sin explicaciones ni markdown
 - Sin ```python ni ```
 - Código listo para ejecutar directamente
-
-Si necesitas documentación de alguna librería, puedes usar search_documentation().
 """
 
         return prompt
