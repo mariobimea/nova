@@ -285,7 +285,7 @@ class GraphEngine:
                     context=context.get_all(),
                     timeout=node.timeout,
                     workflow=workflow_definition,  # Pass workflow for model resolution
-                    node={"id": node.id, "type": "ActionNode", "model": getattr(node, "model", None)}  # Pass node for model resolution
+                    node={"id": node.id, "type": "action", "model": getattr(node, "model", None)}  # Pass node type for prompt customization
                 )
 
                 # DEBUG: Log what executor returned
@@ -364,7 +364,7 @@ class GraphEngine:
                     context=context.get_all(),
                     timeout=node.timeout,
                     workflow=workflow_definition,  # Pass workflow for model resolution
-                    node={"id": node.id, "type": "DecisionNode", "model": getattr(node, "model", None)}  # Pass node for model resolution
+                    node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)}  # Pass node type for prompt customization
                 )
 
                 # Extract AI metadata if present (only for CachedExecutor)
