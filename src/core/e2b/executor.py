@@ -136,7 +136,10 @@ class E2BExecutor:
         Inyecta el context como variable global en el código.
 
         El código del usuario puede acceder a `context` directamente.
-        Al final, extraemos el context actualizado.
+
+        IMPORTANTE: NO agregamos print automático porque el código generado
+        por el AI ya incluye su propio print con el formato:
+        print(json.dumps({"status": "success", "context_updates": {...}}))
         """
         # Serializar context de manera segura
         context_json = json.dumps(context, default=str)
@@ -151,33 +154,62 @@ context = json.loads('''{context_json}''')
 # ==================== CÓDIGO DEL USUARIO ====================
 {code}
 # ============================================================
-
-# Retornar context actualizado como JSON
-print("__NOVA_RESULT__:", json.dumps(context, default=str))
 """
 
     def _parse_result(self, stdout: str, original_context: Dict) -> Dict:
         """
-        Parsea el resultado de E2B y retorna el contexto actualizado.
+        Parsea el resultado del AI y retorna el contexto actualizado.
 
-        Busca la línea "__NOVA_RESULT__: {...}" en stdout.
+        El código generado por el AI imprime JSON en formato:
+        {"status": "success", "context_updates": {...}}
+
+        Este método:
+        1. Busca este JSON en stdout
+        2. Extrae context_updates
+        3. Hace MERGE con original_context
+        4. Retorna contexto completo actualizado
+
+        También soporta formato legacy donde se imprime el contexto completo.
         """
         if not stdout:
             logger.warning("No stdout from E2B execution, retornando context original")
             return original_context
 
-        # stdout es un string, no una lista de líneas
+        # Buscar JSON en stdout (puede estar en cualquier línea)
         for line in stdout.split('\n'):
-            if "__NOVA_RESULT__:" in line:
-                try:
-                    json_str = line.split("__NOVA_RESULT__:")[1].strip()
-                    updated_context = json.loads(json_str)
-                    logger.debug(f"Context actualizado: {list(updated_context.keys())}")
-                    return updated_context
-                except json.JSONDecodeError as e:
-                    logger.error(f"Error parseando resultado: {e}")
-                    raise Exception(f"Invalid JSON in result: {e}")
+            line = line.strip()
 
-        # Si no encontramos el resultado, algo salió mal
-        logger.warning("No se encontró __NOVA_RESULT__ en stdout, retornando context original")
+            # Skip empty lines or lines that don't look like JSON
+            if not line or not line.startswith('{'):
+                continue
+
+            try:
+                output_json = json.loads(line)
+
+                # Formato del AI: {"status": "success", "context_updates": {...}}
+                if isinstance(output_json, dict) and "context_updates" in output_json:
+                    context_updates = output_json.get("context_updates", {})
+
+                    # CRITICAL: MERGE context_updates with original_context
+                    # This preserves data that wasn't modified (e.g., pdf_data)
+                    updated_context = original_context.copy()
+                    updated_context.update(context_updates)
+
+                    logger.debug(f"Context updates aplicados: {list(context_updates.keys())}")
+                    logger.debug(f"Context final tiene {len(updated_context)} keys")
+                    return updated_context
+
+                # Formato legacy: todo el contexto directamente
+                # {"email_from": "...", "email_subject": "...", ...}
+                else:
+                    logger.debug("Formato legacy detectado (contexto completo), usando JSON tal cual")
+                    return output_json
+
+            except json.JSONDecodeError as e:
+                # Esta línea no es JSON válido, continuar con la siguiente
+                continue
+
+        # Si no encontramos JSON válido, retornar original
+        logger.warning("No se encontró JSON válido en stdout, retornando context original")
+        logger.debug(f"Stdout recibido:\n{stdout[:500]}...")
         return original_context
