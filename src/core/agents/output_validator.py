@@ -163,17 +163,11 @@ class OutputValidatorAgent(BaseAgent):
 
         # Agregar código generado si está disponible (para mejor contexto)
         if generated_code:
-            # Truncar código si es muy largo (max 1500 chars para el prompt)
-            code_preview = generated_code[:1500] + "\n... [TRUNCATED FOR BREVITY]" if len(generated_code) > 1500 else generated_code
             prompt += f"""
 **Código que se ejecutó:**
 ```python
-{code_preview}
+{generated_code}
 ```
-
-⚠️ IMPORTANTE: Si el código muestra "[TRUNCATED FOR BREVITY]", esto es SOLO para ahorrar espacio en este prompt.
-El código COMPLETO se ejecutó exitosamente en el sandbox. NO evalúes basándote en si el código está truncado aquí.
-Evalúa basándote en los CAMBIOS EN EL CONTEXTO (before vs after) y si cumplen con la tarea solicitada.
 """
 
         prompt += """
@@ -243,8 +237,15 @@ Devuelve JSON:
             # CASO 1: Strings
             if isinstance(value, str):
                 if len(value) > max_str_length:
-                    # Truncar pero mostrar inicio + metadata
-                    compact[key] = f"{value[:max_str_length]}... [TRUNCATED - total {len(value)} chars]"
+                    # Detect if it's likely base64 encoded data (PDF, images, etc.)
+                    is_base64 = len(value) > 10000 and all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in value[:100])
+
+                    if is_base64:
+                        # Likely a PDF or binary file in base64
+                        compact[key] = f"<base64 data: {len(value)} chars, likely PDF/binary file>"
+                    else:
+                        # Truncar pero mostrar inicio + metadata
+                        compact[key] = f"{value[:max_str_length]}... [TRUNCATED - total {len(value)} chars]"
                 else:
                     # String corto, enviar completo
                     compact[key] = value
@@ -284,7 +285,15 @@ Devuelve JSON:
         """
         if isinstance(value, str):
             if len(value) > max_str_length:
-                return f"{value[:max_str_length]}... [TRUNCATED - {len(value)} chars]"
+                # Detect if it's likely base64 encoded data (PDF, images, etc.)
+                # Base64 strings are typically very long and contain only alphanumeric + /+=
+                is_base64 = len(value) > 10000 and all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in value[:100])
+
+                if is_base64:
+                    # Likely a PDF or binary file in base64
+                    return f"<base64 data: {len(value)} chars, likely PDF/binary file>"
+                else:
+                    return f"{value[:max_str_length]}... [TRUNCATED - {len(value)} chars]"
             return value
 
         elif isinstance(value, dict):
