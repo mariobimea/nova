@@ -79,7 +79,8 @@ class CodeGeneratorAgent(BaseAgent):
         self,
         task: str,
         context_state: ContextState,
-        error_history: List[Dict] = None
+        error_history: List[Dict] = None,
+        node_type: Optional[str] = None
     ) -> AgentResponse:
         """
         Genera código Python que resuelve la tarea.
@@ -88,6 +89,7 @@ class CodeGeneratorAgent(BaseAgent):
             task: Tarea a resolver
             context_state: Estado del contexto
             error_history: Errores de intentos previos (para retry)
+            node_type: Tipo de nodo ("action", "decision", etc.) - opcional
 
         Returns:
             AgentResponse con:
@@ -103,7 +105,8 @@ class CodeGeneratorAgent(BaseAgent):
                 task,
                 context_state.current,
                 context_state.data_insights,
-                error_history or []
+                error_history or [],
+                node_type=node_type
             )
 
             # Llamar a OpenAI con tool calling
@@ -173,7 +176,8 @@ class CodeGeneratorAgent(BaseAgent):
         task: str,
         context: Dict,
         data_insights: Optional[Dict],
-        error_history: List[Dict]
+        error_history: List[Dict],
+        node_type: Optional[str] = None
     ) -> str:
         """Construye el prompt para generación de código"""
 
@@ -247,7 +251,42 @@ class CodeGeneratorAgent(BaseAgent):
 8. **ARCHIVOS BINARIOS:** Los archivos NO persisten entre nodos (cada nodo ejecuta en sandbox aislado).
    - Para GUARDAR archivos: encode con base64 → context['file_data'] = base64.b64encode(bytes).decode()
    - Para LEER archivos: decode → bytes = base64.b64decode(context['file_data'])
+"""
 
+        # Add special instructions for DecisionNode
+        if node_type == "decision":
+            prompt += """
+**🔀 IMPORTANTE - ESTE ES UN NODO DE DECISIÓN (DecisionNode):**
+
+Los DecisionNodes evalúan una condición y deciden qué rama del workflow seguir.
+Tu código DEBE:
+
+1. **Evaluar la condición** descrita en la tarea
+2. **Establecer `context['branch_decision']`** con el valor de la rama a seguir
+3. El valor de `branch_decision` debe ser un string que coincida con las condiciones definidas en el workflow
+
+**Ejemplo de código para DecisionNode:**
+
+```python
+# Evaluar la condición (ejemplo: verificar si hay PDF adjunto)
+has_pdf = len(context.get('email_attachments', [])) > 0
+
+# REQUERIDO: Establecer branch_decision con 'true' o 'false'
+if has_pdf:
+    context['branch_decision'] = 'true'
+else:
+    context['branch_decision'] = 'false'
+
+# Imprimir contexto actualizado
+print(json.dumps(context, ensure_ascii=False, indent=2))
+```
+
+⚠️ **CRÍTICO:** El código DEBE establecer `context['branch_decision']` o fallará.
+Los valores típicos son: 'true', 'false', 'yes', 'no', 'approved', 'rejected', etc.
+"""
+        else:
+            # Standard instructions for ActionNode
+            prompt += """
 **IMPORTANTE - EL CÓDIGO DEBE IMPRIMIR OUTPUT:**
 Tu código DEBE terminar imprimiendo los resultados actualizados del contexto.
 Al final del código, SIEMPRE incluye:
@@ -259,7 +298,10 @@ print(json.dumps(context, ensure_ascii=False, indent=2))
 
 ⚠️ SIN este print final, el código se considerará INVÁLIDO.
 El print debe mostrar TODO el contexto (incluyendo las keys que agregaste).
+"""
 
+        # Common instructions for all node types
+        prompt += """
 **Cuándo usar search_documentation():**
 - Si necesitas sintaxis específica de una librería (ej: "cómo abrir PDF con PyMuPDF")
 - Si no estás seguro de cómo usar una API (ej: "enviar email con SMTP")

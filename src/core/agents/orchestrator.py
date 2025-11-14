@@ -161,7 +161,8 @@ class MultiAgentOrchestrator:
         self,
         task: str,
         context: Dict,
-        timeout: int = 60
+        timeout: int = 60,
+        node_type: Optional[str] = None
     ) -> Dict:
         """
         Ejecuta el workflow completo con todos los agentes.
@@ -170,6 +171,7 @@ class MultiAgentOrchestrator:
             task: Tarea a resolver (en lenguaje natural)
             context: Contexto inicial
             timeout: Timeout para ejecución en E2B
+            node_type: Tipo de nodo ("action", "decision", etc.) - opcional
 
         Returns:
             {
@@ -255,7 +257,8 @@ class MultiAgentOrchestrator:
                     code_gen = await self.code_generator.execute(
                         task=task,
                         context_state=context_state,
-                        error_history=execution_state.errors
+                        error_history=execution_state.errors,
+                        node_type=node_type  # Pass node type to code generator
                     )
 
                     # 🔥 Registrar step 3: CodeGenerator
