@@ -51,6 +51,40 @@ class MultiAgentOrchestrator:
         self.max_retries = max_retries
         self.logger = logger
 
+    def _summarize_context_for_step(self, context: Dict) -> Dict:
+        """
+        Resume el contexto para guardarlo en steps (evita guardar PDFs/data pesada).
+
+        Args:
+            context: Contexto completo
+
+        Returns:
+            Contexto resumido (strings largos truncados)
+        """
+        summary = {}
+
+        for key, value in context.items():
+            if isinstance(value, str):
+                if len(value) > 200:
+                    # Truncar strings largos (PDFs en base64, emails, etc.)
+                    summary[key] = f"<string: {len(value)} chars>"
+                else:
+                    summary[key] = value
+            elif isinstance(value, bytes):
+                # Bytes (PDFs, imágenes)
+                summary[key] = f"<bytes: {len(value)} bytes>"
+            elif isinstance(value, (list, dict)):
+                # Listas/dicts: mostrar tipo y cantidad
+                summary[key] = f"<{type(value).__name__}: {len(value)} items>"
+            elif isinstance(value, (int, float, bool)):
+                # Números y booleanos: mantener valor real
+                summary[key] = value
+            else:
+                # Otros tipos: mostrar tipo
+                summary[key] = f"<{type(value).__name__}>"
+
+        return summary
+
     def _create_step_record(
         self,
         step_number: int,
@@ -74,20 +108,27 @@ class MultiAgentOrchestrator:
             agent_name: Nombre del agente ("InputAnalyzer", "CodeGenerator", etc.)
             attempt_number: Número de intento (1-3)
             agent_response: Respuesta del agente (AgentResponse)
-            input_data: Datos de entrada que recibió el agente
+            input_data: Datos de entrada que recibió el agente (YA debe estar resumido)
             generated_code: Código generado (solo para CodeGenerator, DataAnalyzer)
             sandbox_id: ID del sandbox E2B (solo para E2BExecutor)
 
         Returns:
             Dict con toda la metadata del step para persistir
         """
+        # Preparar output_data (sin código duplicado)
+        output_data = agent_response.data if agent_response.success else None
+
+        # Si es CodeGenerator, remover 'code' del output_data (ya está en generated_code)
+        if agent_name == "CodeGenerator" and output_data and isinstance(output_data, dict):
+            output_data = {k: v for k, v in output_data.items() if k != "code"}
+
         step_record = {
             "step_number": step_number,
             "step_name": step_name,
             "agent_name": agent_name,
             "attempt_number": attempt_number,
             "input_data": input_data,
-            "output_data": agent_response.data if agent_response.success else None,
+            "output_data": output_data,
             "generated_code": generated_code,
             "sandbox_id": sandbox_id,
             "status": "success" if agent_response.success else "failed",
@@ -188,7 +229,7 @@ class MultiAgentOrchestrator:
                         attempt_number=1,
                         agent_response=data_analysis,
                         input_data={
-                            "context": context_state.current,
+                            "context": self._summarize_context_for_step(context_state.current),
                             "hint": input_analysis.data.get("reasoning")
                         },
                         generated_code=data_analysis.data.get("analysis_code") if data_analysis.success else None
@@ -227,7 +268,7 @@ class MultiAgentOrchestrator:
                             agent_response=code_gen,
                             input_data={
                                 "task": task,
-                                "context": context_state.current,
+                                "context": self._summarize_context_for_step(context_state.current),
                                 "data_insights": context_state.data_insights,
                                 "error_history": execution_state.errors
                             },
@@ -310,8 +351,8 @@ class MultiAgentOrchestrator:
                                 attempt_number=attempt,
                                 agent_response=e2b_response,
                                 input_data={
-                                    "code": code_gen.data["code"],
-                                    "context": context_state.current
+                                    "code_summary": f"<code: {len(code_gen.data['code'])} chars>",
+                                    "context": self._summarize_context_for_step(context_state.current)
                                 },
                                 sandbox_id=sandbox_id
                             )
@@ -340,8 +381,8 @@ class MultiAgentOrchestrator:
                                 attempt_number=attempt,
                                 agent_response=e2b_response,
                                 input_data={
-                                    "code": code_gen.data["code"],
-                                    "context": context_state.current
+                                    "code_summary": f"<code: {len(code_gen.data['code'])} chars>",
+                                    "context": self._summarize_context_for_step(context_state.current)
                                 },
                                 sandbox_id=sandbox_id
                             )
@@ -354,7 +395,8 @@ class MultiAgentOrchestrator:
                     output_val = await self.output_validator.execute(
                         task=task,
                         context_before=context_state.initial,
-                        context_after=context_state.current
+                        context_after=context_state.current,
+                        generated_code=code_gen.data["code"]
                     )
 
                     # 🔥 Registrar step 6: OutputValidator
@@ -367,8 +409,9 @@ class MultiAgentOrchestrator:
                             agent_response=output_val,
                             input_data={
                                 "task": task,
-                                "context_before": context_state.initial,
-                                "context_after": context_state.current
+                                "context_before": self._summarize_context_for_step(context_state.initial),
+                                "context_after": self._summarize_context_for_step(context_state.current),
+                                "code_summary": f"<code: {len(code_gen.data['code'])} chars>"
                             }
                         )
                     )

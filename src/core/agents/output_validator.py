@@ -31,7 +31,8 @@ class OutputValidatorAgent(BaseAgent):
         self,
         task: str,
         context_before: Dict,
-        context_after: Dict
+        context_after: Dict,
+        generated_code: str = None
     ) -> AgentResponse:
         """
         Valida semánticamente si la tarea se completó correctamente.
@@ -40,6 +41,7 @@ class OutputValidatorAgent(BaseAgent):
             task: Tarea que se solicitó resolver
             context_before: Contexto antes de la ejecución
             context_after: Contexto después de la ejecución
+            generated_code: Código generado que se ejecutó (opcional, para debugging)
 
         Returns:
             AgentResponse con:
@@ -54,7 +56,7 @@ class OutputValidatorAgent(BaseAgent):
             changes = self._detect_changes(context_before, context_after)
 
             # Construir prompt
-            prompt = self._build_prompt(task, context_before, context_after, changes)
+            prompt = self._build_prompt(task, context_before, context_after, changes, generated_code)
 
             # Llamar a OpenAI
             response = await self.client.chat.completions.create(
@@ -137,7 +139,8 @@ class OutputValidatorAgent(BaseAgent):
         task: str,
         context_before: Dict,
         context_after: Dict,
-        changes: list
+        changes: list,
+        generated_code: str = None
     ) -> str:
         """Construye el prompt para validación"""
 
@@ -145,7 +148,7 @@ class OutputValidatorAgent(BaseAgent):
         before_summary = self._summarize_context(context_before)
         after_summary = self._summarize_context(context_after)
 
-        return f"""Valida si esta tarea se completó correctamente.
+        prompt = f"""Valida si esta tarea se completó correctamente.
 
 **Tarea solicitada:** {task}
 
@@ -156,17 +159,30 @@ class OutputValidatorAgent(BaseAgent):
 {json.dumps(after_summary, indent=2)}
 
 **Cambios detectados:** {changes if changes else "Ninguno"}
+"""
 
+        # Agregar código generado si está disponible (para mejor contexto)
+        if generated_code:
+            # Truncar código si es muy largo (max 500 chars para el prompt)
+            code_preview = generated_code[:500] + "..." if len(generated_code) > 500 else generated_code
+            prompt += f"""
+**Código ejecutado:**
+```python
+{code_preview}
+```
+"""
+
+        prompt += """
 Devuelve JSON:
-{{
+{
   "valid": true/false,
   "reason": "Por qué es válido o inválido"
-}}
+}
 
 Es INVÁLIDO si:
 - No hay cambios en el contexto (nada se agregó ni modificó)
-- Los valores agregados están vacíos ("", null, [], {{}})
-- Hay errores disfrazados (ej: {{"error": "..."}})
+- Los valores agregados están vacíos ("", null, [], {})
+- Hay errores disfrazados (ej: {"error": "..."})
 - La tarea NO se completó (ej: pidió "total" pero solo agregó "currency")
 - Los valores agregados no tienen sentido para la tarea
 
@@ -175,6 +191,7 @@ Es VÁLIDO si:
 - Los valores tienen sentido para la tarea solicitada
 - La tarea se completó según lo pedido
 """
+        return prompt
 
     def _summarize_context(self, context: Dict) -> Dict:
         """Resume el contexto para el prompt (evita enviar data muy grande)"""
