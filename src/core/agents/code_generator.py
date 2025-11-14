@@ -308,7 +308,7 @@ context_updates = {
 print(json.dumps({
     "status": "success",
     "context_updates": context_updates
-}, ensure_ascii=False, indent=2))
+}, ensure_ascii=False))
 ```
 
 ⚠️ **CRÍTICO:**
@@ -331,11 +331,11 @@ context_updates = {
     # Solo incluye las keys que agregaste o modificaste
 }
 
-# Imprime en formato estructurado
+# Imprime en formato estructurado (sin indent para evitar problemas de parsing)
 print(json.dumps({
     "status": "success",
     "context_updates": context_updates
-}, ensure_ascii=False, indent=2))
+}, ensure_ascii=False))
 ```
 
 ⚠️ **CRÍTICO:**

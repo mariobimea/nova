@@ -166,8 +166,7 @@ context = json.loads('''{context_json}''')
         Este método:
         1. Busca este JSON en stdout
         2. Extrae context_updates
-        3. Hace MERGE con original_context
-        4. Retorna contexto completo actualizado
+        3. Retorna SOLO las actualizaciones (no el contexto completo)
 
         También soporta formato legacy donde se imprime el contexto completo.
         """
@@ -175,7 +174,29 @@ context = json.loads('''{context_json}''')
             logger.warning("No stdout from E2B execution, no hay updates")
             return {}  # Return empty dict when no stdout
 
-        # Buscar JSON en stdout (puede estar en cualquier línea)
+        stdout = stdout.strip()
+
+        # PRIMERO: Intentar parsear TODO el stdout como JSON (para multi-línea)
+        # Esto maneja casos donde el AI genera JSON con indent
+        try:
+            output_json = json.loads(stdout)
+
+            # Formato del AI: {"status": "success", "context_updates": {...}}
+            if isinstance(output_json, dict) and "context_updates" in output_json:
+                context_updates = output_json.get("context_updates", {})
+                logger.debug(f"Context updates extraídos (multiline JSON): {list(context_updates.keys())}")
+                return context_updates
+
+            # Formato legacy: todo el contexto directamente
+            else:
+                logger.debug("Formato legacy detectado (contexto completo), usando JSON tal cual")
+                return output_json
+
+        except json.JSONDecodeError:
+            # Si falla, intentar línea por línea (fallback)
+            pass
+
+        # SEGUNDO: Buscar JSON línea por línea (fallback para stdout con texto adicional)
         for line in stdout.split('\n'):
             line = line.strip()
 
@@ -189,19 +210,15 @@ context = json.loads('''{context_json}''')
                 # Formato del AI: {"status": "success", "context_updates": {...}}
                 if isinstance(output_json, dict) and "context_updates" in output_json:
                     context_updates = output_json.get("context_updates", {})
-
-                    # IMPORTANT: Return ONLY the updates, not the full merged context
-                    # The orchestrator will handle the merging
-                    logger.debug(f"Context updates extraídos: {list(context_updates.keys())}")
+                    logger.debug(f"Context updates extraídos (single line): {list(context_updates.keys())}")
                     return context_updates
 
                 # Formato legacy: todo el contexto directamente
-                # {"email_from": "...", "email_subject": "...", ...}
                 else:
                     logger.debug("Formato legacy detectado (contexto completo), usando JSON tal cual")
                     return output_json
 
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError:
                 # Esta línea no es JSON válido, continuar con la siguiente
                 continue
 
