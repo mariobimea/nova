@@ -192,8 +192,25 @@ class CodeGeneratorAgent(BaseAgent):
             elif isinstance(value, (int, float, bool)):
                 # Para números y booleanos, mostrar el valor real
                 context_schema[key] = value
+            elif isinstance(value, list):
+                # Para listas, mostrar estructura con valores reales
+                if len(value) == 0:
+                    context_schema[key] = []
+                elif len(value) <= 3:
+                    # Lista pequeña: mostrar todos los valores
+                    context_schema[key] = value
+                else:
+                    # Lista grande: mostrar primeros 3 elementos + indicador
+                    context_schema[key] = value[:3] + [f"... (+{len(value)-3} more)"]
+            elif isinstance(value, dict):
+                # Para diccionarios, mostrar estructura completa si es pequeño
+                if len(value) <= 5:
+                    context_schema[key] = value
+                else:
+                    # Dict grande: mostrar solo las keys
+                    context_schema[key] = f"<dict with keys: {list(value.keys())}>"
             else:
-                # Para otros tipos, mostrar tipo
+                # Para otros tipos (objetos, etc), mostrar tipo
                 context_schema[key] = f"<{type(value).__name__}>"
 
         prompt = f"""Genera código Python que resuelve esta tarea:
