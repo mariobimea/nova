@@ -192,16 +192,25 @@ class GraphEngine:
                 f"DecisionNode {current_node_id} did not set 'branch_decision' in context"
             )
 
-        # Find edge matching the decision
-        # Convert boolean to string for comparison
-        decision_str = "true" if decision_result else "false"
+        # Convert decision result to string for edge matching
+        # Supports both boolean (True/False) and string ('true'/'false', 'yes'/'no', etc.)
+        if isinstance(decision_result, bool):
+            decision_str = "true" if decision_result else "false"
+        elif isinstance(decision_result, str):
+            decision_str = decision_result.lower()
+        else:
+            raise GraphExecutionError(
+                f"DecisionNode {current_node_id} set 'branch_decision' to unsupported type: "
+                f"{type(decision_result).__name__} = {decision_result}. Expected bool or str."
+            )
 
         for edge in outgoing_edges:
             if edge.get("condition") == decision_str:
                 return edge["to"]
 
         raise GraphExecutionError(
-            f"No edge found for decision result '{decision_str}' from node {current_node_id}"
+            f"No edge found for decision result '{decision_str}' from node {current_node_id}. "
+            f"Available conditions: {[e.get('condition') for e in outgoing_edges]}"
         )
 
     async def _execute_node(
@@ -402,16 +411,22 @@ class GraphEngine:
                     logger.error(error_msg)
                     raise GraphExecutionError(error_msg)
 
-                # Validar que es booleano
-                if not isinstance(decision_result, bool):
+                # Convert decision result to string for edge matching
+                # Supports both boolean (True/False) and string ('true'/'false', 'yes'/'no', etc.)
+                if isinstance(decision_result, bool):
+                    decision_str = "true" if decision_result else "false"
+                elif isinstance(decision_result, str):
+                    decision_str = decision_result.lower()
+                else:
                     error_msg = (
-                        f"DecisionNode {node.id} set 'branch_decision' to non-boolean value: "
-                        f"{type(decision_result).__name__} = {decision_result}"
+                        f"DecisionNode {node.id} set 'branch_decision' to unsupported type: "
+                        f"{type(decision_result).__name__} = {decision_result}. "
+                        f"Expected bool or str."
                     )
                     logger.error(error_msg)
                     raise GraphExecutionError(error_msg)
 
-                metadata["decision_result"] = "true" if decision_result else "false"
+                metadata["decision_result"] = decision_str
 
             else:
                 raise GraphExecutionError(f"Unknown node type: {type(node)}")
