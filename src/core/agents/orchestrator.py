@@ -204,7 +204,7 @@ class MultiAgentOrchestrator:
                     agent_response=input_analysis,
                     input_data={
                         "task": task,
-                        "context_keys": list(context.keys())
+                        "context": self._summarize_context_for_step(context_state.current)
                     }
                 )
             )

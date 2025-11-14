@@ -43,11 +43,11 @@ class InputAnalyzerAgent(BaseAgent):
                 - reasoning: str
         """
         try:
-            # Obtener solo las keys del contexto (no valores completos)
-            context_keys = list(context_state.current.keys())
+            # Obtener contexto resumido (keys + valores truncados)
+            context_summary = self._summarize_context(context_state.current)
 
             # Construir prompt
-            prompt = self._build_prompt(task, context_keys)
+            prompt = self._build_prompt(task, context_summary)
 
             # Llamar a OpenAI
             start_time = time.time()
@@ -109,13 +109,49 @@ class InputAnalyzerAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
-    def _build_prompt(self, task: str, context_keys: list) -> str:
+    def _summarize_context(self, context: Dict) -> Dict:
+        """
+        Resume el contexto para el prompt (evita enviar data muy grande).
+
+        Args:
+            context: Contexto completo
+
+        Returns:
+            Contexto resumido (strings largos truncados a metadata)
+        """
+        summary = {}
+
+        for key, value in context.items():
+            if isinstance(value, str):
+                if len(value) > 200:
+                    # Truncar strings largos (PDFs en base64, emails, etc.)
+                    summary[key] = f"<string: {len(value)} chars>"
+                else:
+                    # Mantener valores cortos completos
+                    summary[key] = value
+            elif isinstance(value, bytes):
+                # Bytes (PDFs, imágenes)
+                summary[key] = f"<bytes: {len(value)} bytes>"
+            elif isinstance(value, (list, dict)):
+                # Listas/dicts: mostrar tipo y cantidad
+                summary[key] = f"<{type(value).__name__}: {len(value)} items>"
+            elif isinstance(value, (int, float, bool, type(None))):
+                # Números, booleanos, None: mantener valor real
+                summary[key] = value
+            else:
+                # Otros tipos: mostrar tipo
+                summary[key] = f"<{type(value).__name__}>"
+
+        return summary
+
+    def _build_prompt(self, task: str, context_summary: dict) -> str:
         """Construye el prompt para el modelo"""
         return f"""Tu tarea: Decidir si necesitamos analizar la estructura de los datos antes de resolver la tarea.
 
 Tarea a resolver: {task}
 
-Contexto disponible (solo keys): {context_keys}
+Contexto disponible (keys + valores resumidos):
+{json.dumps(context_summary, indent=2)}
 
 Devuelve JSON con esta estructura exacta:
 {{
