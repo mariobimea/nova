@@ -333,7 +333,9 @@ class MultiAgentOrchestrator:
                             context=context_state.current,
                             timeout=timeout
                         )
-                        context_state.current = updated_context
+                        # MERGE context updates with current context
+                        # This preserves existing keys that weren't modified
+                        context_state.current.update(updated_context)
                         execution_state.execution_result = {"status": "success"}
 
                         e2b_time_ms = (time.time() - e2b_start) * 1000

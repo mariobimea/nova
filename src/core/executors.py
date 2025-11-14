@@ -585,8 +585,11 @@ print(json.dumps(context, ensure_ascii=True))
                             error_details=message
                         )
 
-                    # Extract context updates for successful execution
-                    updated_context = output_json.get("context_updates", {})
+                    # Extract context updates and MERGE with original context
+                    # CRITICAL: Only return the updates, NOT the full merged context
+                    # The orchestrator will handle merging in context_state.current
+                    context_updates = output_json.get("context_updates", {})
+                    updated_context = context_updates
 
                     # Log successful execution
                     if status:
