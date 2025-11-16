@@ -106,7 +106,8 @@ class CodeGeneratorAgent(BaseAgent):
                 context_state.current,
                 context_state.data_insights,
                 error_history or [],
-                node_type=node_type
+                node_type=node_type,
+                analysis_validation=context_state.analysis_validation  # 🔥 NUEVO: Pasar validation reasoning
             )
 
             # Llamar a OpenAI con tool calling
@@ -223,7 +224,8 @@ class CodeGeneratorAgent(BaseAgent):
         context: Dict,
         data_insights: Optional[Dict],
         error_history: List[Dict],
-        node_type: Optional[str] = None
+        node_type: Optional[str] = None,
+        analysis_validation: Optional[Dict] = None
     ) -> str:
         """Construye el prompt para generación de código"""
 
@@ -248,12 +250,38 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
         # Agregar insights si existen
         if data_insights:
             prompt += f"""
-**Insights sobre la data:**
+**Insights sobre la data (DataAnalyzer):**
 {json.dumps(data_insights, indent=2)}
+"""
 
-⚠️ **IMPORTANTE:** Los insights proporcionan información clave sobre el estado y características de la data.
-Úsalos para tomar decisiones sobre cómo resolver la tarea (qué herramientas usar, qué enfoque tomar, etc.).
-Analiza los insights antes de elegir tu estrategia de implementación.
+        # 🔥 NUEVO: Agregar reasoning del AnalysisValidator
+        if analysis_validation:
+            prompt += f"""
+**Análisis de los insights (AnalysisValidator):**
+{analysis_validation.get('reason', 'No reasoning available')}
+"""
+
+            # Si hay suggestions, agregarlas
+            suggestions = analysis_validation.get('suggestions', [])
+            if suggestions:
+                prompt += f"""
+**Sugerencias para implementación:**
+{json.dumps(suggestions, indent=2, ensure_ascii=False)}
+"""
+
+        # Continuar con el resto del prompt
+        if data_insights or analysis_validation:
+            prompt += """
+⚠️ **IMPORTANTE:** Los insights y su análisis proporcionan información CLAVE sobre la data.
+- Los insights (DataAnalyzer) describen QUÉ ES la data (tipo, estructura, características)
+- El análisis (AnalysisValidator) explica QUÉ SIGNIFICA y qué estrategia usar
+- ÚSALOS para elegir el enfoque correcto (qué librerías, qué métodos, qué flujo)
+- Analiza esta información ANTES de elegir tu estrategia de implementación
+
+**Ejemplos de uso:**
+- Si `has_text_layer: false` → Usa EasyOCR para extraer texto de PDF escaneado
+- Si `type: image` con `has_text: false` → Usa OCR o descripción visual según la tarea
+- Si `attachment_count: 0` → No intentes procesar attachments inexistentes
 """
 
         # Agregar errores previos si es un retry

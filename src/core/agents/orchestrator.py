@@ -403,6 +403,15 @@ class MultiAgentOrchestrator:
                         # ¡ÉXITO!
                         analysis_success = True
                         context_state.data_insights = insights
+
+                        # 🔥 NUEVO: Guardar el reasoning del AnalysisValidator
+                        # Esto le da al CodeGenerator contexto sobre QUÉ SIGNIFICAN los insights
+                        context_state.analysis_validation = {
+                            "valid": insights_val.data.get("valid", True),
+                            "reason": insights_val.data.get("reason", ""),
+                            "suggestions": insights_val.data.get("suggestions", [])
+                        }
+
                         execution_state.data_analysis = {
                             **data_analysis.data,
                             "insights": insights
@@ -455,6 +464,7 @@ class MultiAgentOrchestrator:
                                 "task": task,
                                 "context": self._summarize_context_for_step(context_state.current),
                                 "data_insights": context_state.data_insights,
+                                "analysis_validation": context_state.analysis_validation,  # 🔥 NUEVO: Incluir validation reasoning
                                 "error_history": execution_state.errors
                             },
                             generated_code=code_gen.data.get("code") if code_gen.success else None
