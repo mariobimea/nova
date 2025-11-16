@@ -63,7 +63,7 @@ class InputAnalyzerAgent(BaseAgent):
                         "content": prompt
                     }
                 ],
-                temperature=0.3,
+                temperature=0.5,
                 response_format={"type": "json_object"},
                 timeout=30.0  # 30 segundos timeout
             )
@@ -167,8 +167,10 @@ Devuelve JSON con esta estructura exacta:
   Ejemplo: {{"pdf_data": "<string: 500000 chars>"}} → needs_analysis=true
 - Data muy grande YA PRESENTE (strings >10000 caracteres)
   Ejemplo: {{"email_raw": "<string: 50000 chars>"}} → needs_analysis=true
-- Estructuras complejas YA PRESENTES (arrays largos, objetos anidados profundos)
-  Ejemplo: {{"attachments": "<list: 50 items>"}} → needs_analysis=true
+- Estructuras YA PRESENTES (arrays, objetos anidados
+  Ejemplo: {{"attachments": "<list: 2 items>"}} → needs_analysis=true
+
+  Es decir, si no se ve claramente la data, se reuqiere de analisis
 
 ❌ NO necesitas análisis (needs_analysis=false) si el CONTEXTO ACTUAL solo tiene:
 - Valores simples (strings cortos, números, booleans, null)
