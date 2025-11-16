@@ -525,34 +525,90 @@ class MultiAgentOrchestrator:
                             context=context_state.current,
                             timeout=timeout
                         )
-                        # MERGE context updates with current context
-                        # This preserves existing keys that weren't modified
-                        context_state.current.update(updated_context)
-                        execution_state.execution_result = {"status": "success"}
 
-                        e2b_time_ms = (time.time() - e2b_start) * 1000
+                        # 🔥 NUEVO: Detectar si E2B retornó un error en lugar de lanzar excepción
+                        if isinstance(updated_context, dict) and updated_context.get("_execution_error"):
+                            # E2B ejecutó pero el código crasheó
+                            error_msg = updated_context.get("_error_message", "Unknown E2B error")
+                            stderr = updated_context.get("_stderr", "")
+                            stdout = updated_context.get("_stdout", "")
+                            exit_code = updated_context.get("_exit_code", -1)
 
-                        # 🔥 Registrar step 5: E2B Execution (success)
-                        e2b_response = AgentResponse(
-                            success=True,
-                            data={"context_updates": updated_context},
-                            execution_time_ms=e2b_time_ms
-                        )
+                            self.logger.error(f"❌ {error_msg}")
 
-                        steps_to_persist.append(
-                            self._create_step_record(
-                                step_number=5,
-                                step_name="e2b_execution",
-                                agent_name="E2BExecutor",
-                                attempt_number=attempt,
-                                agent_response=e2b_response,
-                                input_data={
-                                    "code_summary": f"<code: {len(code_gen.data['code'])} chars>",
-                                    "context": self._summarize_context_for_step(context_state.current)
-                                },
-                                sandbox_id=sandbox_id
+                            # Agregar error detallado al historial para feedback al CodeGenerator
+                            execution_state.add_error(
+                                "execution",
+                                f"{error_msg}\n\nStderr:\n{stderr}\n\nStdout:\n{stdout}"
                             )
-                        )
+
+                            e2b_time_ms = (time.time() - e2b_start) * 1000
+
+                            # Registrar step 5: E2B Execution (failed con detalles)
+                            e2b_response = AgentResponse(
+                                success=False,
+                                error=error_msg,
+                                data={
+                                    "stderr": stderr,
+                                    "stdout": stdout,
+                                    "exit_code": exit_code
+                                },
+                                execution_time_ms=e2b_time_ms
+                            )
+
+                            steps_to_persist.append(
+                                self._create_step_record(
+                                    step_number=5,
+                                    step_name="e2b_execution",
+                                    agent_name="E2BExecutor",
+                                    attempt_number=attempt,
+                                    agent_response=e2b_response,
+                                    input_data={
+                                        "code_summary": f"<code: {len(code_gen.data['code'])} chars>",
+                                        "context": self._summarize_context_for_step(context_state.current)
+                                    },
+                                    sandbox_id=sandbox_id
+                                )
+                            )
+
+                            # NO continue aquí - queremos que el OutputValidator vea el error
+                            # y lo valide como inválido, agregando el stderr al feedback
+                            execution_state.execution_result = {
+                                "status": "failed",
+                                "stderr": stderr,
+                                "stdout": stdout
+                            }
+
+                        else:
+                            # Ejecución exitosa
+                            # MERGE context updates with current context
+                            # This preserves existing keys that weren't modified
+                            context_state.current.update(updated_context)
+                            execution_state.execution_result = {"status": "success"}
+
+                            e2b_time_ms = (time.time() - e2b_start) * 1000
+
+                            # 🔥 Registrar step 5: E2B Execution (success)
+                            e2b_response = AgentResponse(
+                                success=True,
+                                data={"context_updates": updated_context},
+                                execution_time_ms=e2b_time_ms
+                            )
+
+                            steps_to_persist.append(
+                                self._create_step_record(
+                                    step_number=5,
+                                    step_name="e2b_execution",
+                                    agent_name="E2BExecutor",
+                                    attempt_number=attempt,
+                                    agent_response=e2b_response,
+                                    input_data={
+                                        "code_summary": f"<code: {len(code_gen.data['code'])} chars>",
+                                        "context": self._summarize_context_for_step(context_state.current)
+                                    },
+                                    sandbox_id=sandbox_id
+                                )
+                            )
 
                     except Exception as e:
                         error_msg = f"Error en E2B: {str(e)}"
@@ -591,7 +647,8 @@ class MultiAgentOrchestrator:
                         task=task,
                         context_before=context_state.initial,
                         context_after=context_state.current,
-                        generated_code=code_gen.data["code"]
+                        generated_code=code_gen.data["code"],
+                        execution_result=execution_state.execution_result  # 🔥 NUEVO: Pasar stderr/stdout
                     )
 
                     # 🔥 Registrar step 6: OutputValidator
@@ -622,6 +679,13 @@ class MultiAgentOrchestrator:
                         # Retry con feedback del validator
                         error_msg = f"Output inválido: {output_val.data['reason']}"
                         self.logger.warning(f"⚠️ {error_msg}")
+
+                        # 🔥 NUEVO: Si el OutputValidator extrajo un python_error, agregarlo al feedback
+                        python_error = output_val.data.get("python_error")
+                        if python_error:
+                            error_msg += f"\n\n**Error de Python detectado:**\n{python_error}"
+                            self.logger.error(f"🐍 Python error: {python_error}")
+
                         execution_state.add_error("output_validation", error_msg)
                         continue
 

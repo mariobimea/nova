@@ -111,7 +111,16 @@ class E2BExecutor:
                     if execution.stderr:
                         error_msg += f": {execution.stderr}"
                     logger.error(error_msg)
-                    raise Exception(error_msg)
+
+                    # 🔥 NUEVO: En lugar de lanzar excepción, retornar dict con error info
+                    # Esto permite que el orchestrator capture el error exacto y lo pase al OutputValidator
+                    return {
+                        "_execution_error": True,
+                        "_error_message": error_msg,
+                        "_stderr": execution.stderr if execution.stderr else "",
+                        "_stdout": execution.stdout if execution.stdout else "",
+                        "_exit_code": execution.exit_code
+                    }
 
                 # Parse result from stdout
                 updated_context = self._parse_result(execution.stdout, context)

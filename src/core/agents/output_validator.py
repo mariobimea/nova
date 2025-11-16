@@ -32,7 +32,8 @@ class OutputValidatorAgent(BaseAgent):
         task: str,
         context_before: Dict,
         context_after: Dict,
-        generated_code: str = None
+        generated_code: str = None,
+        execution_result: Dict = None  # 🔥 NUEVO: Info de ejecución E2B (stderr, stdout, status)
     ) -> AgentResponse:
         """
         Valida semánticamente si la tarea se completó correctamente.
@@ -42,6 +43,7 @@ class OutputValidatorAgent(BaseAgent):
             context_before: Contexto antes de la ejecución
             context_after: Contexto después de la ejecución
             generated_code: Código generado que se ejecutó (opcional, para debugging)
+            execution_result: Resultado de la ejecución en E2B (stderr, stdout, status)
 
         Returns:
             AgentResponse con:
@@ -56,7 +58,7 @@ class OutputValidatorAgent(BaseAgent):
             changes = self._detect_changes(context_before, context_after)
 
             # Construir prompt
-            prompt = self._build_prompt(task, context_before, context_after, changes, generated_code)
+            prompt = self._build_prompt(task, context_before, context_after, changes, generated_code, execution_result)
 
             # Llamar a OpenAI
             response = await self.client.chat.completions.create(
@@ -140,7 +142,8 @@ class OutputValidatorAgent(BaseAgent):
         context_before: Dict,
         context_after: Dict,
         changes: list,
-        generated_code: str = None
+        generated_code: str = None,
+        execution_result: Dict = None
     ) -> str:
         """Construye el prompt para validación CON CONTEXTO COMPLETO"""
 
@@ -161,6 +164,34 @@ class OutputValidatorAgent(BaseAgent):
 **Cambios detectados:** {changes if changes else "Ninguno"}
 """
 
+        # 🔥 NUEVO: Agregar información de ejecución (stderr, stdout, status)
+        if execution_result:
+            status = execution_result.get("status", "unknown")
+            prompt += f"""
+**Resultado de la ejecución:**
+- Status: {status}
+"""
+
+            # Si hay stderr (error de Python), incluirlo
+            stderr = execution_result.get("stderr", "")
+            if stderr:
+                prompt += f"""
+- **Error (stderr):**
+```
+{stderr[:1000]}  # Truncar a 1000 chars
+```
+"""
+
+            # Si hay stdout (puede tener información útil)
+            stdout = execution_result.get("stdout", "")
+            if stdout:
+                prompt += f"""
+- **Output (stdout):**
+```
+{stdout[:500]}  # Truncar a 500 chars
+```
+"""
+
         # Agregar código generado si está disponible (para mejor contexto)
         if generated_code:
             prompt += f"""
@@ -174,7 +205,8 @@ class OutputValidatorAgent(BaseAgent):
 Devuelve JSON:
 {
   "valid": true/false,
-  "reason": "Explicación detallada de por qué es válido o inválido"
+  "reason": "Explicación detallada de por qué es válido o inválido",
+  "python_error": "Si hay error en stderr, extrae SOLO la línea del error específico (ej: 'AttributeError: X object has no attribute Y'). Si no hay error, omite este campo."
 }
 
 🔴 Es INVÁLIDO si:
@@ -184,6 +216,7 @@ Devuelve JSON:
 4. **Tarea incompleta** → La tarea pedía X pero solo se hizo Y (ej: pidió "total" pero solo agregó "currency")
 5. **Valores sin sentido** → Los valores agregados no tienen relación con la tarea
 6. **Código falló** → El código crasheó o no hizo nada útil
+7. **Error en stderr** → Hay un error de Python en stderr (AttributeError, TypeError, ImportError, etc.)
 
 🟢 Es VÁLIDO si:
 1. **Cambios relevantes** → Se agregaron o modificaron datos importantes
