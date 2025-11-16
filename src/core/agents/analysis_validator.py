@@ -154,86 +154,47 @@ class AnalysisValidatorAgent(BaseAgent):
 """
 
         prompt += """
+**INSTRUCCIONES DE VALIDACIÓN:**
+
+Analiza los insights generados y determina si son VÁLIDOS o INVÁLIDOS.
+
+🟢 **Los insights son VÁLIDOS si contienen metadata útil:**
+
+Para PDFs, debe tener:
+- type: "pdf"
+- pages: número (ej: 1, 3, 5)
+- has_text_layer: true/false
+- filename: string
+
+Para Imágenes, debe tener:
+- type: "image"
+- format: "PNG"/"JPEG"/etc
+- size: [width, height]
+- has_text: true/false (si contiene texto visible)
+
+Para Emails, debe tener:
+- type: "email"
+- has_attachments: true/false
+- attachment_count: número
+- subject: string
+
+🔴 **Los insights son INVÁLIDOS solo si:**
+1. type = "unknown" (no detectó el tipo)
+2. type está definido PERO faltan TODAS las demás keys de metadata
+3. Contiene key "error" indicando fallo
+4. Metadata vacía o sin sentido
+
+**IMPORTANTE:**
+- Si type="pdf" Y tiene "pages" Y tiene "has_text_layer" → ES VÁLIDO (aunque has_text_layer sea false)
+- has_text_layer=false es VÁLIDO y útil (indica que necesita OCR)
+- NO exijas metadata que no esté en los ejemplos de arriba
+- Si los insights contienen la información estructural básica → ES VÁLIDO
+
 Devuelve JSON:
 {
   "valid": true/false,
-  "reason": "Explicación detallada",
+  "reason": "Explicación concreta de por qué es válido/inválido",
   "suggestions": ["sugerencia 1", "sugerencia 2"]  // solo si invalid
 }
-
-🔴 Los insights son INVÁLIDOS si:
-1. **type = "unknown"** → No detectó el tipo de data real
-2. **Falta metadata crítica** → type="pdf" pero sin pages, has_text_layer, etc.
-3. **Metadata inútil** → Solo copia keys del context sin analizar la data real
-4. **Error en insights** → Tiene key "error" indicando que el análisis falló
-5. **No ayuda para la tarea** → Los insights no son útiles para resolver la tarea
-6. **Valores sin sentido** → Metadata que no corresponde al tipo de data
-
-🟢 Los insights son VÁLIDOS si:
-1. **type detectado correctamente** → type="pdf"/"image"/"email"/etc (NO "unknown")
-2. **Metadata útil y específica** → Información estructural relevante (pages, format, size, has_text_layer, etc.)
-3. **Relevante para tarea** → La metadata ayudará al CodeGenerator a resolver la tarea
-4. **Sin errores** → No hay crashes ni fallos en el análisis
-5. **Valores razonables** → La metadata tiene sentido (ej: pages > 0 para PDF)
-
-**Ejemplos de insights VÁLIDOS:**
-
-Para PDF:
-{
-  "type": "pdf",
-  "pages": 3,
-  "has_text_layer": true,
-  "filename": "invoice.pdf"
-}
-
-Para Imagen:
-{
-  "type": "image",
-  "format": "PNG",
-  "size": [1920, 1080],
-  "has_text": true
-}
-
-Para Email:
-{
-  "type": "email",
-  "has_attachments": true,
-  "attachment_count": 2,
-  "subject": "Invoice #1234"
-}
-
-**Ejemplos de insights INVÁLIDOS:**
-
-{
-  "type": "unknown"  // ❌ No detectó el tipo
-}
-
-{
-  "type": "pdf"  // ❌ Falta metadata (pages, has_text_layer)
-}
-
-{
-  "type": "pdf",
-  "error": "Could not parse"  // ❌ Falló el análisis
-}
-
-**Suggestions (solo si invalid):**
-- Específicas y accionables
-- Qué metadata debería extraer
-- Qué librerías debería usar
-- Cómo corregir el error
-
-Ejemplo:
-[
-  "Usa PyMuPDF para detectar el número de páginas: len(doc)",
-  "Verifica si tiene capa de texto con: doc[0].get_text()",
-  "Extrae el filename de context['attachments'][0]['filename']"
-]
-
-**IMPORTANTE:**
-- Sé CRÍTICO: Si type="unknown" o falta metadata esencial → INVÁLIDO
-- Compara los insights con el contexto schema para verificar que realmente analizó la data
-- Si los insights ayudarán al CodeGenerator → VÁLIDO
-- Si son genéricos o vacíos → INVÁLIDO
 """
         return prompt
