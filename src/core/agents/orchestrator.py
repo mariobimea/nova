@@ -367,7 +367,7 @@ class MultiAgentOrchestrator:
                         insights_val = await self.analysis_validator.execute(
                             task=task,
                             insights=insights,
-                            context_schema=context_state.current,
+                            context_schema=self._summarize_context_for_step(context_state.current),
                             analysis_code=data_analysis.data["analysis_code"]
                         )
 
