@@ -167,10 +167,15 @@ Devuelve JSON con esta estructura exacta:
   Ejemplo: {{"pdf_data": "<string: 500000 chars>"}} → needs_analysis=true
 - Data muy grande YA PRESENTE (strings >10000 caracteres)
   Ejemplo: {{"email_raw": "<string: 50000 chars>"}} → needs_analysis=true
-- Estructuras YA PRESENTES (arrays, objetos anidados
+- Estructuras complejas YA PRESENTES (dictionaries, arrays con contenido anidado)
   Ejemplo: {{"attachments": "<list: 2 items>"}} → needs_analysis=true
+  Ejemplo: {{"metadata": "<dict: 5 items>"}} → needs_analysis=true
 
-  Es decir, si no se ve claramente la data, se reuqiere de analisis
+  ⚠️ IMPORTANTE: Si ves "<dict: X items>" o "<list: X items>" → ES UNA ESTRUCTURA COMPLEJA
+  → Esto significa que hay datos anidados que necesitan ser analizados
+  → needs_analysis=true
+
+  Es decir, si no se ve claramente la data, se requiere de análisis
 
 ❌ NO necesitas análisis (needs_analysis=false) si el CONTEXTO ACTUAL solo tiene:
 - Valores simples (strings cortos, números, booleans, null)
