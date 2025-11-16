@@ -181,12 +181,17 @@ Devuelve JSON:
 - Si type="email" con attachment_count=0 → ES VÁLIDO (indica que no hay attachments)
 - Metadata parcial es VÁLIDA si es útil (no necesita tener TODAS las keys posibles)
 
-**IMPORTANTE:**
-- Sé CRÍTICO: Si los insights no ayudan a resolver la tarea, márcalos como inválidos
-- Compara la TAREA con los INSIGHTS (¿sirven para resolverla?)
+**IMPORTANTE - LOS INSIGHTS SON DESCRIPTIVOS, NO RESOLUTIVOS:**
+- ⚠️ El DataAnalyzer solo ANALIZA la data, NO la procesa ni resuelve la tarea
+- ⚠️ Los insights son METADATA INFORMATIVA para que el CodeGenerator sepa qué estrategia usar
+- ⚠️ Detectar "no hay texto" o "necesita OCR" es un insight VÁLIDO (guía la estrategia)
+- Sé CRÍTICO pero evalúa si los insights DESCRIBEN la data, no si RESUELVEN la tarea
+- Compara: ¿Los insights informan sobre la ESTRUCTURA/CARACTERÍSTICAS de la data? Sí/No
 - Metadata vacía/genérica sin estructura → INVÁLIDO
 - Metadata estructurada aunque sea parcial → VÁLIDO
 - Distingue "código falló" (crash) vs "código funcionó pero detectó que no hay datos"
+
+🎯 Pregunta clave: ¿Los insights proporcionan información útil SOBRE LA DATA para guiar al CodeGenerator?
 
 **Tu reason debe explicar**:
 - ¿Qué tipo de información se esperaba según la tarea?
