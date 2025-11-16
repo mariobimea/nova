@@ -15,6 +15,7 @@ def mock_agents():
         "code_generator": Mock(),
         "code_validator": Mock(),
         "output_validator": Mock(),
+        "analysis_validator": Mock(),
         "e2b_executor": Mock()
     }
 
@@ -28,6 +29,7 @@ def orchestrator(mock_agents):
         code_generator=mock_agents["code_generator"],
         code_validator=mock_agents["code_validator"],
         output_validator=mock_agents["output_validator"],
+        analysis_validator=mock_agents["analysis_validator"],
         e2b_executor=mock_agents["e2b_executor"],
         max_retries=3
     )
@@ -100,12 +102,25 @@ async def test_orchestrator_with_data_analysis(orchestrator, mock_agents):
         agent_name="InputAnalyzer"
     ))
 
-    # Mock DataAnalyzer
+    # Mock DataAnalyzer - ahora solo genera código
     mock_agents["data_analyzer"].execute = AsyncMock(return_value=AgentResponse(
         success=True,
-        data={"type": "pdf", "pages": 1},
+        data={"analysis_code": "import fitz\ninsights = {'type': 'pdf'}"},
         execution_time_ms=50.0,
         agent_name="DataAnalyzer"
+    ))
+
+    # Mock parse_insights (método público del DataAnalyzer)
+    mock_agents["data_analyzer"].parse_insights = Mock(
+        return_value={"type": "pdf", "pages": 1}
+    )
+
+    # Mock AnalysisValidator
+    mock_agents["analysis_validator"].execute = AsyncMock(return_value=AgentResponse(
+        success=True,
+        data={"valid": True, "reason": "Insights válidos"},
+        execution_time_ms=30.0,
+        agent_name="AnalysisValidator"
     ))
 
     # Mock rest of agents (simple success path)
@@ -116,6 +131,7 @@ async def test_orchestrator_with_data_analysis(orchestrator, mock_agents):
         agent_name="CodeGenerator"
     ))
 
+    # CodeValidator valida tanto código de análisis como código final
     mock_agents["code_validator"].execute = AsyncMock(return_value=AgentResponse(
         success=True,
         data={"valid": True, "errors": []},
@@ -123,8 +139,12 @@ async def test_orchestrator_with_data_analysis(orchestrator, mock_agents):
         agent_name="CodeValidator"
     ))
 
+    # E2B executor - dos llamadas: una para análisis, otra para código final
     mock_agents["e2b_executor"].execute_code = AsyncMock(
-        return_value={"data": "test", "result": 1}
+        side_effect=[
+            {"insights": {"type": "pdf", "pages": 1}},  # Primera llamada: análisis
+            {"data": "test", "result": 1}  # Segunda llamada: código final
+        ]
     )
 
     mock_agents["output_validator"].execute = AsyncMock(return_value=AgentResponse(
@@ -142,8 +162,10 @@ async def test_orchestrator_with_data_analysis(orchestrator, mock_agents):
     )
 
     # Verificar que DataAnalyzer fue llamado
-    assert result["_ai_metadata"]["data_analysis"]["type"] == "pdf"
+    assert result["_ai_metadata"]["data_analysis"]["insights"]["type"] == "pdf"
     mock_agents["data_analyzer"].execute.assert_called_once()
+    # Verificar que AnalysisValidator fue llamado
+    mock_agents["analysis_validator"].execute.assert_called_once()
 
 
 @pytest.mark.asyncio

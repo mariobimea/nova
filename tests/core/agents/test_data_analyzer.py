@@ -1,4 +1,8 @@
-"""Tests para DataAnalyzerAgent"""
+"""Tests para DataAnalyzerAgent
+
+NOTA: DataAnalyzer ahora solo genera código de análisis, NO ejecuta E2B.
+La ejecución en E2B se hace en el Orchestrator.
+"""
 
 import pytest
 from unittest.mock import Mock, AsyncMock
@@ -16,8 +20,8 @@ def mock_openai_client():
 
 @pytest.fixture
 def mock_e2b_executor():
+    """E2B executor (ya no se usa en DataAnalyzer pero necesario para constructor)"""
     executor = Mock()
-    executor.execute_code = AsyncMock()
     return executor
 
 
@@ -27,27 +31,29 @@ def data_analyzer(mock_openai_client, mock_e2b_executor):
 
 
 @pytest.mark.asyncio
-async def test_data_analyzer_pdf(data_analyzer, mock_openai_client, mock_e2b_executor):
-    """Analiza PDF correctamente"""
+async def test_data_analyzer_generates_code(data_analyzer, mock_openai_client):
+    """Genera código de análisis correctamente"""
 
     # Mock: código generado por IA
     mock_code_response = Mock()
     mock_code_response.choices = [Mock()]
     mock_code_response.choices[0].message.content = """
 import fitz
-insights = {"type": "pdf", "pages": 3}
-"""
-    mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
+import base64
+import json
 
-    # Mock: resultado de E2B
-    mock_e2b_executor.execute_code.return_value = {
-        "pdf_data_b64": "...",
-        "insights": {
-            "type": "pdf",
-            "pages": 3,
-            "has_text_layer": True
-        }
-    }
+pdf_bytes = base64.b64decode(context['pdf_data_b64'])
+doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+insights = {"type": "pdf", "pages": len(doc)}
+
+print(json.dumps({"insights": insights}, ensure_ascii=False))
+"""
+    mock_code_response.usage = Mock()
+    mock_code_response.usage.prompt_tokens = 400
+    mock_code_response.usage.completion_tokens = 100
+
+    mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
 
     # Ejecutar
     context_state = ContextState(
@@ -58,23 +64,20 @@ insights = {"type": "pdf", "pages": 3}
     response = await data_analyzer.execute(context_state)
 
     assert response.success is True
-    assert response.data["type"] == "pdf"
-    assert response.data["pages"] == 3
     assert "analysis_code" in response.data
+    assert "import fitz" in response.data["analysis_code"]
+    assert "model" in response.data
+    assert response.data["model"] == "gpt-4o-mini"
 
 
 @pytest.mark.asyncio
-async def test_data_analyzer_e2b_execution_error(data_analyzer, mock_openai_client, mock_e2b_executor):
-    """Error en E2B se maneja correctamente"""
+async def test_data_analyzer_handles_ai_error(data_analyzer, mock_openai_client):
+    """Maneja errores de IA correctamente"""
 
-    # Mock: código generado
-    mock_code_response = Mock()
-    mock_code_response.choices = [Mock()]
-    mock_code_response.choices[0].message.content = "insights = {}"
-    mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
-
-    # Mock: E2B falla
-    mock_e2b_executor.execute_code.side_effect = Exception("E2B timeout")
+    # Mock: IA falla
+    mock_openai_client.chat.completions.create = AsyncMock(
+        side_effect=Exception("OpenAI API timeout")
+    )
 
     context_state = ContextState(
         initial={"data": "test"},
@@ -84,25 +87,26 @@ async def test_data_analyzer_e2b_execution_error(data_analyzer, mock_openai_clie
     response = await data_analyzer.execute(context_state)
 
     assert response.success is False
-    assert "E2B timeout" in response.error
+    assert "OpenAI API timeout" in response.error
 
 
 @pytest.mark.asyncio
-async def test_data_analyzer_cleans_markdown(data_analyzer, mock_openai_client, mock_e2b_executor):
+async def test_data_analyzer_cleans_markdown(data_analyzer, mock_openai_client):
     """Limpia markdown del código generado"""
 
     # Mock: código con markdown
     mock_code_response = Mock()
     mock_code_response.choices = [Mock()]
     mock_code_response.choices[0].message.content = """```python
+import json
 insights = {"type": "test"}
+print(json.dumps({"insights": insights}))
 ```"""
-    mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
+    mock_code_response.usage = Mock()
+    mock_code_response.usage.prompt_tokens = 100
+    mock_code_response.usage.completion_tokens = 50
 
-    # Mock: E2B retorna insights
-    mock_e2b_executor.execute_code.return_value = {
-        "insights": {"type": "test"}
-    }
+    mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
 
     context_state = ContextState(
         initial={"data": "test"},
@@ -114,29 +118,41 @@ insights = {"type": "test"}
     assert response.success is True
     # Verificar que el código fue limpiado (no tiene ```)
     assert "```" not in response.data["analysis_code"]
+    assert "import json" in response.data["analysis_code"]
 
 
 @pytest.mark.asyncio
-async def test_data_analyzer_fallback_when_no_insights(data_analyzer, mock_openai_client, mock_e2b_executor):
-    """Usa fallback cuando no encuentra insights"""
+async def test_data_analyzer_with_error_history(data_analyzer, mock_openai_client):
+    """Genera código con error_history para retry"""
 
     mock_code_response = Mock()
     mock_code_response.choices = [Mock()]
-    mock_code_response.choices[0].message.content = "print('test')"
-    mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
+    mock_code_response.choices[0].message.content = "import json\ninsights = {'type': 'test'}\nprint(json.dumps({'insights': insights}))"
+    mock_code_response.usage = Mock()
+    mock_code_response.usage.prompt_tokens = 500
+    mock_code_response.usage.completion_tokens = 80
 
-    # Mock: E2B no retorna insights
-    mock_e2b_executor.execute_code.return_value = {
-        "data": "test"
-        # No hay 'insights' key
-    }
+    mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
 
     context_state = ContextState(
         initial={"data": "test"},
         current={"data": "test"}
     )
 
-    response = await data_analyzer.execute(context_state)
+    error_history = [
+        {
+            "stage": "analysis_validation",
+            "error": "type='unknown' no es útil",
+            "suggestions": ["Detecta el tipo real de data"]
+        }
+    ]
+
+    response = await data_analyzer.execute(context_state, error_history=error_history)
 
     assert response.success is True
-    assert response.data["type"] == "unknown"
+    assert "analysis_code" in response.data
+
+    # Verificar que el prompt incluyó los errores
+    call_args = mock_openai_client.chat.completions.create.call_args
+    prompt = call_args.kwargs["messages"][1]["content"]
+    assert "ERRORES PREVIOS" in prompt

@@ -24,6 +24,7 @@ from .data_analyzer import DataAnalyzerAgent
 from .code_generator import CodeGeneratorAgent
 from .code_validator import CodeValidatorAgent
 from .output_validator import OutputValidatorAgent
+from .analysis_validator import AnalysisValidatorAgent
 from ..e2b.executor import E2BExecutor
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class MultiAgentOrchestrator:
         code_generator: CodeGeneratorAgent,
         code_validator: CodeValidatorAgent,
         output_validator: OutputValidatorAgent,
+        analysis_validator: AnalysisValidatorAgent,
         e2b_executor: E2BExecutor,
         max_retries: int = 3
     ):
@@ -47,6 +49,7 @@ class MultiAgentOrchestrator:
         self.code_generator = code_generator
         self.code_validator = code_validator
         self.output_validator = output_validator
+        self.analysis_validator = analysis_validator
         self.e2b = e2b_executor
         self.max_retries = max_retries
         self.logger = logger
@@ -217,33 +220,212 @@ class MultiAgentOrchestrator:
             execution_state.input_analysis = input_analysis.data
             execution_state.add_timing("InputAnalyzer", input_analysis.execution_time_ms)
 
-            # 3. DataAnalyzer (UNA SOLA VEZ, si es necesario)
+            # 3. DataAnalyzer (CON RETRY LOOP, si es necesario)
             if input_analysis.data["needs_analysis"]:
-                self.logger.info("🔬 Ejecutando DataAnalyzer...")
-                data_analysis = await self.data_analyzer.execute(context_state)
+                analysis_success = False
+                analysis_errors = []  # Para feedback loop
 
-                # 🔥 Registrar step 2: DataAnalyzer
-                steps_to_persist.append(
-                    self._create_step_record(
-                        step_number=2,
-                        step_name="data_analysis",
-                        agent_name="DataAnalyzer",
-                        attempt_number=1,
-                        agent_response=data_analysis,
-                        input_data={
-                            "context": self._summarize_context_for_step(context_state.current),
-                            "hint": input_analysis.data.get("reasoning")
-                        },
-                        generated_code=data_analysis.data.get("analysis_code") if data_analysis.success else None
-                    )
-                )
+                for analysis_attempt in range(1, self.max_retries + 1):
+                    self.logger.info(f"🔬 DataAnalyzer intento {analysis_attempt}/{self.max_retries}")
 
-                if not data_analysis.success:
-                    raise Exception(f"DataAnalyzer falló: {data_analysis.error}")
+                    try:
+                        # 3.1 DataAnalyzer genera código de análisis
+                        self.logger.info("💻 Generando código de análisis...")
+                        data_analysis = await self.data_analyzer.execute(
+                            context_state=context_state,
+                            error_history=analysis_errors
+                        )
 
-                execution_state.data_analysis = data_analysis.data
-                execution_state.add_timing("DataAnalyzer", data_analysis.execution_time_ms)
-                context_state.data_insights = data_analysis.data
+                        # Registrar step 2: DataAnalyzer
+                        steps_to_persist.append(
+                            self._create_step_record(
+                                step_number=2,
+                                step_name="data_analysis",
+                                agent_name="DataAnalyzer",
+                                attempt_number=analysis_attempt,
+                                agent_response=data_analysis,
+                                input_data={
+                                    "context": self._summarize_context_for_step(context_state.current),
+                                    "error_history": analysis_errors,
+                                    "hint": input_analysis.data.get("reasoning")
+                                },
+                                generated_code=data_analysis.data.get("analysis_code") if data_analysis.success else None
+                            )
+                        )
+
+                        if not data_analysis.success:
+                            error_msg = f"DataAnalyzer falló: {data_analysis.error}"
+                            self.logger.warning(f"⚠️ {error_msg}")
+                            analysis_errors.append({
+                                "stage": "data_analysis_generation",
+                                "error": error_msg,
+                                "attempt": analysis_attempt
+                            })
+                            continue
+
+                        # 3.2 CodeValidator valida código de análisis
+                        self.logger.info("🔍 Validando código de análisis...")
+                        code_val = await self.code_validator.execute(
+                            code=data_analysis.data["analysis_code"],
+                            context=context_state.current
+                        )
+
+                        # Registrar step 2.1: CodeValidator (análisis)
+                        steps_to_persist.append(
+                            self._create_step_record(
+                                step_number=2,  # mismo step_number pero diferente step_name
+                                step_name="analysis_code_validation",
+                                agent_name="CodeValidator",
+                                attempt_number=analysis_attempt,
+                                agent_response=code_val,
+                                input_data={
+                                    "code": data_analysis.data["analysis_code"],
+                                    "context_keys": list(context_state.current.keys())
+                                }
+                            )
+                        )
+
+                        if not code_val.success or not code_val.data["valid"]:
+                            error_msg = f"Código de análisis inválido: {', '.join(code_val.data.get('errors', []))}"
+                            self.logger.warning(f"⚠️ {error_msg}")
+                            analysis_errors.append({
+                                "stage": "analysis_code_validation",
+                                "error": error_msg,
+                                "attempt": analysis_attempt
+                            })
+                            continue
+
+                        # 3.3 E2B execution del código de análisis
+                        self.logger.info("⚡ Ejecutando código de análisis en E2B...")
+                        e2b_start = time.time()
+
+                        try:
+                            insights_result = await self.e2b.execute_code(
+                                code=data_analysis.data["analysis_code"],
+                                context=context_state.current,
+                                timeout=30
+                            )
+                            e2b_time_ms = (time.time() - e2b_start) * 1000
+
+                            # Parsear insights usando el método público del DataAnalyzer
+                            insights = self.data_analyzer.parse_insights(insights_result)
+
+                            # Registrar step 2.2: E2B Execution (análisis)
+                            e2b_response = AgentResponse(
+                                success=True,
+                                data={"insights": insights},
+                                execution_time_ms=e2b_time_ms
+                            )
+
+                            steps_to_persist.append(
+                                self._create_step_record(
+                                    step_number=2,
+                                    step_name="analysis_execution",
+                                    agent_name="E2BExecutor",
+                                    attempt_number=analysis_attempt,
+                                    agent_response=e2b_response,
+                                    input_data={
+                                        "code_summary": f"<code: {len(data_analysis.data['analysis_code'])} chars>"
+                                    }
+                                )
+                            )
+
+                        except Exception as e:
+                            error_msg = f"Error ejecutando análisis en E2B: {str(e)}"
+                            self.logger.error(f"❌ {error_msg}")
+                            e2b_time_ms = (time.time() - e2b_start) * 1000
+
+                            # Registrar step 2.2: E2B Execution (failed)
+                            e2b_response = AgentResponse(
+                                success=False,
+                                error=error_msg,
+                                execution_time_ms=e2b_time_ms
+                            )
+
+                            steps_to_persist.append(
+                                self._create_step_record(
+                                    step_number=2,
+                                    step_name="analysis_execution",
+                                    agent_name="E2BExecutor",
+                                    attempt_number=analysis_attempt,
+                                    agent_response=e2b_response,
+                                    input_data={
+                                        "code_summary": f"<code: {len(data_analysis.data['analysis_code'])} chars>"
+                                    }
+                                )
+                            )
+
+                            analysis_errors.append({
+                                "stage": "analysis_execution",
+                                "error": error_msg,
+                                "attempt": analysis_attempt
+                            })
+                            continue
+
+                        # 3.4 AnalysisValidator valida los insights
+                        self.logger.info("✅ Validando insights...")
+                        insights_val = await self.analysis_validator.execute(
+                            task=task,
+                            insights=insights,
+                            context_schema=context_state.current,
+                            analysis_code=data_analysis.data["analysis_code"]
+                        )
+
+                        # Registrar step 2.3: AnalysisValidator
+                        steps_to_persist.append(
+                            self._create_step_record(
+                                step_number=2,
+                                step_name="analysis_validation",
+                                agent_name="AnalysisValidator",
+                                attempt_number=analysis_attempt,
+                                agent_response=insights_val,
+                                input_data={
+                                    "task": task,
+                                    "insights": insights
+                                }
+                            )
+                        )
+
+                        if not insights_val.success or not insights_val.data["valid"]:
+                            error_msg = f"Insights inválidos: {insights_val.data.get('reason', 'unknown')}"
+                            self.logger.warning(f"⚠️ {error_msg}")
+
+                            # Agregar suggestions al feedback
+                            suggestions = insights_val.data.get("suggestions", [])
+                            analysis_errors.append({
+                                "stage": "analysis_validation",
+                                "error": error_msg,
+                                "suggestions": suggestions,
+                                "attempt": analysis_attempt
+                            })
+                            continue
+
+                        # ¡ÉXITO!
+                        analysis_success = True
+                        context_state.data_insights = insights
+                        execution_state.data_analysis = {
+                            **data_analysis.data,
+                            "insights": insights
+                        }
+                        execution_state.add_timing("DataAnalyzer", data_analysis.execution_time_ms)
+                        self.logger.info(f"🎉 DataAnalyzer completado en intento {analysis_attempt}")
+                        break
+
+                    except Exception as e:
+                        error_msg = f"Error inesperado en DataAnalyzer intento {analysis_attempt}: {str(e)}"
+                        self.logger.error(f"❌ {error_msg}")
+                        analysis_errors.append({
+                            "stage": "unexpected",
+                            "error": error_msg,
+                            "attempt": analysis_attempt
+                        })
+
+                        if analysis_attempt == self.max_retries:
+                            raise
+
+                # Si falló después de todos los intentos
+                if not analysis_success:
+                    raise Exception(f"DataAnalyzer falló después de {self.max_retries} intentos")
 
             # 4. Loop de generación → validación → ejecución → validación
             success = False
@@ -341,7 +523,6 @@ class MultiAgentOrchestrator:
                         e2b_time_ms = (time.time() - e2b_start) * 1000
 
                         # 🔥 Registrar step 5: E2B Execution (success)
-                        from .base import AgentResponse
                         e2b_response = AgentResponse(
                             success=True,
                             data={"context_updates": updated_context},
@@ -371,7 +552,6 @@ class MultiAgentOrchestrator:
                         e2b_time_ms = (time.time() - e2b_start) * 1000
 
                         # 🔥 Registrar step 5: E2B Execution (failed)
-                        from .base import AgentResponse
                         e2b_response = AgentResponse(
                             success=False,
                             error=error_msg,
