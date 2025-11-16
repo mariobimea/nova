@@ -124,7 +124,7 @@ class CodeGeneratorAgent(BaseAgent):
                     }
                 ],
                 tools=self.tools,
-                temperature=0.2
+                temperature=0.6
             )
 
             message = response.choices[0].message
@@ -250,6 +250,10 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
             prompt += f"""
 **Insights sobre la data:**
 {json.dumps(data_insights, indent=2)}
+
+⚠️ **IMPORTANTE:** Los insights proporcionan información clave sobre el estado y características de la data.
+Úsalos para tomar decisiones sobre cómo resolver la tarea (qué herramientas usar, qué enfoque tomar, etc.).
+Analiza los insights antes de elegir tu estrategia de implementación.
 """
 
         # Agregar errores previos si es un retry
@@ -449,7 +453,7 @@ Usa esta documentación para generar el código correcto.
                     "content": enhanced_prompt
                 }
             ],
-            temperature=0.2
+            temperature=0.6
         )
 
     def _extract_code(self, content: str) -> str:
