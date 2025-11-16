@@ -127,7 +127,7 @@ class AnalysisValidatorAgent(BaseAgent):
     ) -> str:
         """Construye el prompt para validación"""
 
-        prompt = f"""Valida estos insights de análisis de datos.
+        prompt = f"""Tu trabajo: Validar si los insights generados son útiles para resolver la tarea.
 
 **Tarea original:** {task}
 
@@ -154,47 +154,44 @@ class AnalysisValidatorAgent(BaseAgent):
 """
 
         prompt += """
-**INSTRUCCIONES DE VALIDACIÓN:**
-
-Analiza los insights generados y determina si son VÁLIDOS o INVÁLIDOS.
-
-🟢 **Los insights son VÁLIDOS si contienen metadata útil:**
-
-Para PDFs, debe tener:
-- type: "pdf"
-- pages: número (ej: 1, 3, 5)
-- has_text_layer: true/false
-- filename: string
-
-Para Imágenes, debe tener:
-- type: "image"
-- format: "PNG"/"JPEG"/etc
-- size: [width, height]
-- has_text: true/false (si contiene texto visible)
-
-Para Emails, debe tener:
-- type: "email"
-- has_attachments: true/false
-- attachment_count: número
-- subject: string
-
-🔴 **Los insights son INVÁLIDOS solo si:**
-1. type = "unknown" (no detectó el tipo)
-2. type está definido PERO faltan TODAS las demás keys de metadata
-3. Contiene key "error" indicando fallo
-4. Metadata vacía o sin sentido
-
-**IMPORTANTE:**
-- Si type="pdf" Y tiene "pages" Y tiene "has_text_layer" → ES VÁLIDO (aunque has_text_layer sea false)
-- has_text_layer=false es VÁLIDO y útil (indica que necesita OCR)
-- NO exijas metadata que no esté en los ejemplos de arriba
-- Si los insights contienen la información estructural básica → ES VÁLIDO
-
 Devuelve JSON:
 {
   "valid": true/false,
-  "reason": "Explicación concreta de por qué es válido/inválido",
+  "reason": "Explicación detallada de por qué es válido o inválido",
   "suggestions": ["sugerencia 1", "sugerencia 2"]  // solo si invalid
 }
+
+🔴 Los insights son INVÁLIDOS si:
+1. **Sin estructura** → El resultado es un string genérico sin metadata útil
+2. **Type desconocido** → type = "unknown" (no pudo detectar qué tipo de datos es)
+3. **Metadata vacía** → Tiene type definido pero TODAS las demás keys están vacías/null/missing
+4. **Error de ejecución** → Contiene key "error" indicando que el código falló
+5. **Sin valor** → Los insights no aportan información útil para resolver la tarea
+
+🟢 Los insights son VÁLIDOS si:
+1. **Metadata estructurada** → Contiene información organizada (no solo un string)
+2. **Type identificado** → Detectó el tipo de datos (pdf, image, email, etc.)
+3. **Keys útiles** → Tiene metadata relevante aunque sea parcial (ej: pages, format, size, etc.)
+4. **Sin errores reales** → No hay crashes ni fallos de ejecución
+5. **Ayuda a la tarea** → La información es útil para el siguiente paso del workflow
+
+⚠️ CASOS ESPECIALES:
+- Si type="pdf" con has_text_layer=false → ES VÁLIDO (indica que necesita OCR)
+- Si type="image" con has_text=false → ES VÁLIDO (indica que no tiene texto visible)
+- Si type="email" con attachment_count=0 → ES VÁLIDO (indica que no hay attachments)
+- Metadata parcial es VÁLIDA si es útil (no necesita tener TODAS las keys posibles)
+
+**IMPORTANTE:**
+- Sé CRÍTICO: Si los insights no ayudan a resolver la tarea, márcalos como inválidos
+- Compara la TAREA con los INSIGHTS (¿sirven para resolverla?)
+- Metadata vacía/genérica sin estructura → INVÁLIDO
+- Metadata estructurada aunque sea parcial → VÁLIDO
+- Distingue "código falló" (crash) vs "código funcionó pero detectó que no hay datos"
+
+**Tu reason debe explicar**:
+- ¿Qué tipo de información se esperaba según la tarea?
+- ¿Qué se obtuvo realmente en los insights?
+- ¿Por qué es válido/inválido?
+- Si es inválido: ¿Qué debería mejorarse en el análisis? (insight para retry)
 """
         return prompt
