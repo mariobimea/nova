@@ -30,6 +30,9 @@ async def test_output_validator_valid_result(output_validator, mock_openai_clien
         "valid": True,
         "reason": "Total extraído correctamente"
     })
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 200
+    mock_response.usage.completion_tokens = 30
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
@@ -58,6 +61,9 @@ async def test_output_validator_no_changes(output_validator, mock_openai_client)
         "valid": False,
         "reason": "No se realizaron cambios en el contexto"
     })
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 150
+    mock_response.usage.completion_tokens = 25
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
@@ -85,6 +91,9 @@ async def test_output_validator_incomplete_task(output_validator, mock_openai_cl
         "valid": False,
         "reason": "La tarea pedía 'total' pero solo se agregó 'currency'"
     })
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 180
+    mock_response.usage.completion_tokens = 28
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 

@@ -198,13 +198,18 @@ Devuelve JSON:
 - Un mensaje descriptivo puede ser válido si explica por qué no hay datos disponibles
 - Si la tarea era "leer email" y no había emails, el error informativo es VÁLIDO
 
-**IMPORTANTE:**
-- Sé CRÍTICO: Si algo falta o está mal, márcalo como inválido
-- Compara la TAREA con el RESULTADO (no solo que haya cambios)
-- Si el código corrió pero no hizo nada útil → INVÁLIDO
-- Si falta información que se pidió → INVÁLIDO
-- Si hay un error REAL (crash/exception) → INVÁLIDO
-- Si hay un error INFORMATIVO pero completó la tarea → VÁLIDO
+**IMPORTANTE - EVALÚA SOLO LA EJECUCIÓN ACTUAL:**
+- ⚠️ NO especules sobre "qué pasaría si..." o "el código podría fallar si..."
+- ⚠️ SOLO evalúa: ¿Esta ejecución específica funcionó correctamente?
+- Sé CRÍTICO pero basándote en RESULTADOS REALES, no potenciales bugs
+- Compara la TAREA con el RESULTADO ACTUAL (no con casos hipotéticos)
+- Si el código corrió pero no hizo nada útil EN ESTA EJECUCIÓN → INVÁLIDO
+- Si falta información que se pidió EN ESTA EJECUCIÓN → INVÁLIDO
+- Si hay un error REAL (crash/exception) EN ESTA EJECUCIÓN → INVÁLIDO
+- Si hay un error INFORMATIVO pero completó la tarea EN ESTA EJECUCIÓN → VÁLIDO
+- Si la tarea se completó y hay cambios relevantes EN EL CONTEXTO → VÁLIDO
+
+🎯 Pregunta clave: ¿El código hizo lo que se pidió EN ESTA EJECUCIÓN específica? Sí/No
 
 **Tu reason debe explicar**:
 - ¿Qué se esperaba según la tarea?
