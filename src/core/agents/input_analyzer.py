@@ -146,11 +146,13 @@ class InputAnalyzerAgent(BaseAgent):
 
     def _build_prompt(self, task: str, context_summary: dict) -> str:
         """Construye el prompt para el modelo"""
-        return f"""Tu tarea: Decidir si necesitamos analizar la estructura de los datos antes de resolver la tarea.
+        return f"""Tu tarea: Decidir si necesitamos analizar la estructura del CONTEXTO ACTUAL antes de resolver la tarea.
+
+⚠️ IMPORTANTE: Analiza el CONTEXTO ACTUAL, NO lo que la tarea va a generar.
 
 Tarea a resolver: {task}
 
-Contexto disponible (keys + valores resumidos):
+Contexto disponible AHORA (keys + valores resumidos):
 {json.dumps(context_summary, indent=2)}
 
 Devuelve JSON con esta estructura exacta:
@@ -160,19 +162,32 @@ Devuelve JSON con esta estructura exacta:
   "reasoning": "Por qué decidiste esto"
 }}
 
-Necesitas análisis (needs_analysis=true) si:
-- La data es binaria (PDFs, imágenes, archivos en base64)
-- La data es muy grande (>1000 caracteres estimados)
-- La estructura es desconocida (CSVs, JSONs complejos, emails crudos)
-- Hay múltiples fuentes de datos que interactúan
+✅ Necesitas análisis (needs_analysis=true) SOLO si el CONTEXTO ACTUAL contiene:
+- Data binaria YA PRESENTE (PDFs, imágenes, archivos en base64)
+  Ejemplo: {{"pdf_data": "<string: 500000 chars>"}} → needs_analysis=true
+- Data muy grande YA PRESENTE (strings >10000 caracteres)
+  Ejemplo: {{"email_raw": "<string: 50000 chars>"}} → needs_analysis=true
+- Estructuras complejas YA PRESENTES (arrays largos, objetos anidados profundos)
+  Ejemplo: {{"attachments": "<list: 50 items>"}} → needs_analysis=true
 
-NO necesitas análisis (needs_analysis=false) si:
-- Son valores simples (strings cortos, números, booleans)
-- La tarea es trivial (sumar dos números, concatenar strings)
-- El contexto es pequeño y obvio
+❌ NO necesitas análisis (needs_analysis=false) si el CONTEXTO ACTUAL solo tiene:
+- Valores simples (strings cortos, números, booleans, null)
+  Ejemplo: {{"email_user": "user@example.com", "port": 993}} → needs_analysis=false
+- Credenciales o configuración (API keys, hosts, passwords)
+  Ejemplo: {{"db_host": "localhost", "api_key": "xyz"}} → needs_analysis=false
+- Arrays/objetos pequeños (< 10 items)
+  Ejemplo: {{"config": "<dict: 5 items>"}} → needs_analysis=false
 
-Complejidad:
-- "simple": Tarea trivial, contexto pequeño
-- "medium": Requiere cierta lógica, contexto moderado
-- "complex": Requiere análisis profundo, múltiples pasos
+🔴 ERRORES COMUNES A EVITAR:
+- ❌ NO digas needs_analysis=true porque "la tarea va a generar data compleja"
+  → La tarea todavía NO se ejecutó, esa data NO existe aún
+- ❌ NO digas needs_analysis=true porque "hay múltiples fuentes de datos"
+  → Si son solo credenciales (db_host, email_user), NO necesita análisis
+- ❌ NO digas needs_analysis=true por tareas complejas si el contexto es simple
+  → La complejidad de la TAREA no importa, importa la complejidad del CONTEXTO
+
+Complejidad (basada en la TAREA, no en el contexto):
+- "simple": Tarea trivial (1-2 pasos obvios)
+- "medium": Requiere lógica moderada (3-5 pasos)
+- "complex": Requiere múltiples pasos complejos (>5 pasos)
 """

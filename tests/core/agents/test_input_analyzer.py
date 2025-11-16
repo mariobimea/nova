@@ -34,6 +34,9 @@ async def test_input_analyzer_simple_task(input_analyzer, mock_openai_client):
         "complexity": "simple",
         "reasoning": "Tarea trivial con valores simples"
     })
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 100
+    mock_response.usage.completion_tokens = 50
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
@@ -64,6 +67,9 @@ async def test_input_analyzer_complex_task_pdf(input_analyzer, mock_openai_clien
         "complexity": "complex",
         "reasoning": "Es un PDF, necesitamos entender su estructura"
     })
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 200
+    mock_response.usage.completion_tokens = 80
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
