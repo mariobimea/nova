@@ -175,8 +175,7 @@ Devuelve JSON con esta estructura exacta:
   Ejemplo: {{"email_user": "user@example.com", "port": 993}} → needs_analysis=false
 - Credenciales o configuración (API keys, hosts, passwords)
   Ejemplo: {{"db_host": "localhost", "api_key": "xyz"}} → needs_analysis=false
-- Arrays/objetos pequeños (< 10 items)
-  Ejemplo: {{"config": "<dict: 5 items>"}} → needs_analysis=false
+
 
 🔴 ERRORES COMUNES A EVITAR:
 - ❌ NO digas needs_analysis=true porque "la tarea va a generar data compleja"
