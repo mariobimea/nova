@@ -394,8 +394,9 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
 
         # Add special instructions for DecisionNode
         if node_type == "decision":
-            # Determinar la key de decisión basada en node_id
-            decision_key = f"{node_id}_decision" if node_id else "branch_decision"
+            # Use node_id directly as the decision key
+            # Note: node_id already contains descriptive name (e.g., "has_pdf_decision")
+            decision_key = node_id if node_id else "branch_decision"
 
             prompt += f"""
 **🔀 IMPORTANTE - ESTE ES UN NODO DE DECISIÓN (DecisionNode):**

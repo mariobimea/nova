@@ -186,7 +186,8 @@ class GraphEngine:
         # Multiple edges (DecisionNode branching)
         # Read decision result from context using node-specific key
         # This prevents conflicts when multiple DecisionNodes exist in the workflow
-        decision_key = f"{current_node_id}_decision"
+        # Note: node_id already contains descriptive name (e.g., "has_pdf_decision")
+        decision_key = current_node_id
         decision_result = context.get(decision_key)
 
         if decision_result is None:
@@ -401,12 +402,13 @@ class GraphEngine:
                     metadata["code_executed"] = code_or_prompt
 
                 # Extract decision result
-                # The executor MUST set {node_id}_decision in context
-                decision_key = f"{node.id}_decision"
+                # The executor MUST set node_id in context
+                # Note: node_id already contains descriptive name (e.g., "has_pdf_decision")
+                decision_key = node.id
                 decision_result = context.get(decision_key)
 
                 if decision_result is None:
-                    # NO FALLBACK: Si el executor no agregó {node_id}_decision, es un error
+                    # NO FALLBACK: Si el executor no agregó node_id, es un error
                     error_msg = (
                         f"DecisionNode {node.id} did not set '{decision_key}' in context. "
                         f"Available context keys: {list(context.get_all().keys())}"
