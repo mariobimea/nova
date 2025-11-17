@@ -66,9 +66,9 @@ class CodeGeneratorAgent(BaseAgent):
                             },
                             "top_k": {
                                 "type": "integer",
-                                "description": "Número de ejemplos a retornar (1-5)",
+                                "description": "Número de ejemplos a retornar (mínimo 3 para tener contexto completo)",
                                 "default": 3,
-                                "minimum": 1,
+                                "minimum": 3,
                                 "maximum": 5
                             }
                         },
