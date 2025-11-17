@@ -126,7 +126,15 @@ class E2BExecutor:
                 updated_context = self._parse_result(execution.stdout, context)
 
                 logger.info(f"E2B execution successful (sandbox: {sandbox_id})")
-                return updated_context
+
+                # 🔥 NUEVO: SIEMPRE incluir stderr/stdout en el retorno (incluso en éxito)
+                # Esto permite que el OutputValidator tenga contexto completo para validar
+                return {
+                    **updated_context,
+                    "_stderr": execution.stderr if execution.stderr else "",
+                    "_stdout": execution.stdout if execution.stdout else "",
+                    "_exit_code": execution.exit_code
+                }
 
             finally:
                 # Always kill sandbox to avoid charges

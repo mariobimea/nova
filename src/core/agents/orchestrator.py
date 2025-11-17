@@ -581,10 +581,22 @@ class MultiAgentOrchestrator:
 
                         else:
                             # Ejecución exitosa
+                            # 🔥 NUEVO: Extraer stderr/stdout/exit_code antes de actualizar contexto
+                            stderr = updated_context.pop("_stderr", "")
+                            stdout = updated_context.pop("_stdout", "")
+                            exit_code = updated_context.pop("_exit_code", 0)
+
                             # MERGE context updates with current context
                             # This preserves existing keys that weren't modified
                             context_state.current.update(updated_context)
-                            execution_state.execution_result = {"status": "success"}
+
+                            # 🔥 NUEVO: SIEMPRE guardar stderr/stdout (incluso en éxito)
+                            execution_state.execution_result = {
+                                "status": "success",
+                                "exit_code": exit_code,
+                                "stderr": stderr,
+                                "stdout": stdout
+                            }
 
                             e2b_time_ms = (time.time() - e2b_start) * 1000
 
