@@ -148,6 +148,17 @@ def execute_workflow_task(
                     raise ValueError(error_msg)
 
             # ================================================================
+            # LOAD GOOGLE CLOUD VISION CREDENTIALS (always, for OCR tasks)
+            # ================================================================
+            import os
+            gcp_service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
+            if gcp_service_account_json:
+                logger.info(f"Task {task_id}: Loading Google Cloud Vision credentials")
+                initial_context["GCP_SERVICE_ACCOUNT_JSON"] = gcp_service_account_json
+            else:
+                logger.warning(f"Task {task_id}: GCP_SERVICE_ACCOUNT_JSON not found in env vars")
+
+            # ================================================================
             # CREATE EXECUTION RECORD
             # ================================================================
             logger.info(f"Task {task_id}: Creating Execution record")
