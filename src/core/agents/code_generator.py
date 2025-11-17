@@ -112,6 +112,7 @@ class CodeGeneratorAgent(BaseAgent):
                 context_state.data_insights,
                 error_history or [],
                 node_type=node_type,
+                node_id=node_id,  # Pass node_id for DecisionNode key generation
                 analysis_validation=context_state.analysis_validation  # 🔥 NUEVO: Pasar validation reasoning
             )
 
@@ -282,6 +283,7 @@ class CodeGeneratorAgent(BaseAgent):
         data_insights: Optional[Dict],
         error_history: List[Dict],
         node_type: Optional[str] = None,
+        node_id: Optional[str] = None,
         analysis_validation: Optional[Dict] = None
     ) -> str:
         """Construye el prompt para generación de código"""
