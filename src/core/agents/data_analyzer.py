@@ -5,10 +5,10 @@ Responsabilidad:
     Generar y ejecutar código Python que analiza la estructura de la data.
 
 Características:
-    - Modelo: gpt-4o-mini (análisis estructural, rápido)
+    - Modelo: gpt-4o (análisis profundo, mejor razonamiento)
     - Ejecuciones: Hasta 3 veces (con retry loop en orchestrator)
     - Tool calling: NO (por ahora)
-    - Costo: ~$0.0005 por intento + E2B execution
+    - Costo: ~$0.005 por intento + E2B execution
 """
 
 from typing import Dict, Optional, List
@@ -27,7 +27,7 @@ class DataAnalyzerAgent(BaseAgent):
         super().__init__("DataAnalyzer")
         self.client = openai_client
         self.e2b = e2b_executor
-        self.model = "gpt-4o-mini"
+        self.model = "gpt-4o"
 
     async def execute(
         self,
@@ -182,14 +182,33 @@ Si hay "suggestions", síguelas.
 **El código debe:**
 1. Importar librerías necesarias (disponibles: PyMuPDF/fitz, pandas, PIL, email, json, csv, re, base64, easyocr, numpy)
 2. Acceder a la data desde `context['key']` usando las keys que ves en el contexto schema arriba
-3. Analizar estructura
-4. Crear un dict `insights` con información útil sobre el tipo, estructura y características de la data
+3. Analizar el CONTENIDO REAL de la data (NO solo usar type())
+4. Crear un dict `insights` con información ÚTIL y DESCRIPTIVA
 5. **IMPRIMIR** los insights en JSON al final: `print(json.dumps({"insights": insights}, ensure_ascii=False))`
 
+**¿Qué insights son ÚTILES?**
+El objetivo es ayudar al siguiente agente (CodeGenerator) a entender CÓMO procesar la data.
+
+Ejemplos de insights ÚTILES:
+- Para archivos: "filename", "extension", "size_bytes", "is_base64_encoded", "appears_valid"
+- Para listas: "item_count", "first_item_structure", "all_items_same_type"
+- Para dicts: nombres de keys importantes, valores de ejemplo, estructura anidada
+- Para strings: "length", "contains_json", "contains_base64", "language", "preview"
+- Para datos binarios: "format_detected", "first_bytes_hex", "is_compressed"
+
+Ejemplos de insights NO ÚTILES (NO HAGAS ESTO):
+- ❌ {"email_user": "str", "email_password": "str"} → Esto es inútil, solo dice el tipo
+- ❌ {"data": "bytes"} → No ayuda, falta info sobre QUÉ contiene esos bytes
+
+Insights BUENOS (SÍ HAGAS ESTO):
+- ✅ {"email_attachments": [{"filename": "invoice.pdf", "size_kb": 45, "appears_to_be_pdf": true}]}
+- ✅ {"pdf_data": {"is_base64": false, "size_bytes": 45231, "starts_with_pdf_magic": true}}
+
 **IMPORTANTE:**
-- El dict `insights` debe ser serializable (no objetos complejos)
+- Inspecciona VALORES REALES, no solo tipos (NO uses type().__name__ como único insight)
+- Los insights deben DESCRIBIR el contenido de forma útil
+- El dict `insights` debe ser serializable (no objetos complejos, no bytes)
 - Maneja errores con try/except
-- Inspecciona el contexto schema para saber qué keys usar (NO asumas nombres de keys)
 - **SIN el print final, el código se considerará INVÁLIDO**
 
 **Output esperado:**
@@ -228,8 +247,8 @@ Si hay "suggestions", síguelas.
         tokens_input = usage.prompt_tokens if usage else 0
         tokens_output = usage.completion_tokens if usage else 0
 
-        # Costo para gpt-4o-mini: $0.150/1M input, $0.600/1M output
-        cost_usd = (tokens_input * 0.150 / 1_000_000) + (tokens_output * 0.600 / 1_000_000)
+        # Costo para gpt-4o: $2.50/1M input, $10.00/1M output
+        cost_usd = (tokens_input * 2.50 / 1_000_000) + (tokens_output * 10.00 / 1_000_000)
 
         ai_metadata = {
             "model": self.model,
