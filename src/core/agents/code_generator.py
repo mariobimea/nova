@@ -59,7 +59,9 @@ class CodeGeneratorAgent(BaseAgent):
                                 "description": (
                                     "Qué buscar en la documentación (en inglés). "
                                     "Ejemplos: 'extract text from PDF', 'read invoice data', "
-                                    "'OCR from image', 'send email with attachment'"
+                                    "'send email with attachment'. "
+                                    "⚠️ Para google_vision: SIEMPRE incluir 'authentication' o 'credentials' en la query "
+                                    "(ej: 'OCR from PDF with authentication', 'document_text_detection with credentials')"
                                 )
                             },
                             "top_k": {
