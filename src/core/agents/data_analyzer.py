@@ -182,12 +182,11 @@ Si hay "suggestions", síguelas.
 **El código debe:**
 1. Importar librerías necesarias (disponibles: PyMuPDF/fitz, pandas, PIL, email, json, csv, re, base64, easyocr, numpy)
 2. Acceder a la data desde `context['key']` usando las keys que ves en el contexto schema arriba
-3. Analizar estructura SIN procesar toda la data (sería lento - solo muestrea)
+3. Analizar estructura
 4. Crear un dict `insights` con información útil sobre el tipo, estructura y características de la data
 5. **IMPRIMIR** los insights en JSON al final: `print(json.dumps({"insights": insights}, ensure_ascii=False))`
 
 **IMPORTANTE:**
-- NO proceses toda la data (solo muestrea - ej: primera página del PDF, primeras filas del CSV, etc.)
 - El dict `insights` debe ser serializable (no objetos complejos)
 - Maneja errores con try/except
 - Inspecciona el contexto schema para saber qué keys usar (NO asumas nombres de keys)
