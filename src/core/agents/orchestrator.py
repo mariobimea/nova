@@ -24,6 +24,7 @@ from .data_analyzer import DataAnalyzerAgent
 from .code_generator import CodeGeneratorAgent
 from .code_validator import CodeValidatorAgent
 from .output_validator import OutputValidatorAgent
+from .analysis_validator import AnalysisValidatorAgent
 from ..e2b.executor import E2BExecutor
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class MultiAgentOrchestrator:
         code_generator: CodeGeneratorAgent,
         code_validator: CodeValidatorAgent,
         output_validator: OutputValidatorAgent,
+        analysis_validator: AnalysisValidatorAgent,
         e2b_executor: E2BExecutor,
         max_retries: int = 3
     ):
@@ -47,6 +49,7 @@ class MultiAgentOrchestrator:
         self.code_generator = code_generator
         self.code_validator = code_validator
         self.output_validator = output_validator
+        self.analysis_validator = analysis_validator
         self.e2b = e2b_executor
         self.max_retries = max_retries
         self.logger = logger
@@ -359,9 +362,55 @@ class MultiAgentOrchestrator:
                             })
                             continue
 
+                        # 3.4 AnalysisValidator valida los insights
+                        self.logger.info("✅ Validando insights...")
+                        insights_val = await self.analysis_validator.execute(
+                            task=task,
+                            insights=insights,
+                            context_schema=self._summarize_context_for_step(context_state.current),
+                            analysis_code=data_analysis.data["analysis_code"]
+                        )
+
+                        # Registrar step 2.3: AnalysisValidator
+                        steps_to_persist.append(
+                            self._create_step_record(
+                                step_number=2,
+                                step_name="analysis_validation",
+                                agent_name="AnalysisValidator",
+                                attempt_number=analysis_attempt,
+                                agent_response=insights_val,
+                                input_data={
+                                    "task": task,
+                                    "insights": insights
+                                }
+                            )
+                        )
+
+                        if not insights_val.success or not insights_val.data["valid"]:
+                            error_msg = f"Insights inválidos: {insights_val.data.get('reason', 'unknown')}"
+                            self.logger.warning(f"⚠️ {error_msg}")
+
+                            # Agregar suggestions al feedback
+                            suggestions = insights_val.data.get("suggestions", [])
+                            analysis_errors.append({
+                                "stage": "analysis_validation",
+                                "error": error_msg,
+                                "suggestions": suggestions,
+                                "attempt": analysis_attempt
+                            })
+                            continue
+
                         # ¡ÉXITO!
                         analysis_success = True
                         context_state.data_insights = insights
+
+                        # 🔥 NUEVO: Guardar el reasoning del AnalysisValidator
+                        # Esto le da al CodeGenerator contexto sobre QUÉ SIGNIFICAN los insights
+                        context_state.analysis_validation = {
+                            "valid": insights_val.data.get("valid", True),
+                            "reason": insights_val.data.get("reason", ""),
+                            "suggestions": insights_val.data.get("suggestions", [])
+                        }
 
                         execution_state.data_analysis = {
                             **data_analysis.data,
@@ -415,6 +464,7 @@ class MultiAgentOrchestrator:
                                 "task": task,
                                 "context": self._summarize_context_for_step(context_state.current),
                                 "data_insights": context_state.data_insights,
+                                "analysis_validation": context_state.analysis_validation,  # 🔥 NUEVO: Incluir validation reasoning
                                 "error_history": execution_state.errors
                             },
                             generated_code=code_gen.data.get("code") if code_gen.success else None
