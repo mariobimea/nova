@@ -184,12 +184,14 @@ class GraphEngine:
             return outgoing_edges[0]["to"]
 
         # Multiple edges (DecisionNode branching)
-        # Read decision result from context
-        decision_result = context.get("branch_decision")
+        # Read decision result from context using node-specific key
+        # This prevents conflicts when multiple DecisionNodes exist in the workflow
+        decision_key = f"{current_node_id}_decision"
+        decision_result = context.get(decision_key)
 
         if decision_result is None:
             raise GraphExecutionError(
-                f"DecisionNode {current_node_id} did not set 'branch_decision' in context"
+                f"DecisionNode {current_node_id} did not set '{decision_key}' in context"
             )
 
         # Convert decision result to string for edge matching
@@ -200,7 +202,7 @@ class GraphEngine:
             decision_str = decision_result.lower()
         else:
             raise GraphExecutionError(
-                f"DecisionNode {current_node_id} set 'branch_decision' to unsupported type: "
+                f"DecisionNode {current_node_id} set '{decision_key}' to unsupported type: "
                 f"{type(decision_result).__name__} = {decision_result}. Expected bool or str."
             )
 
@@ -399,13 +401,14 @@ class GraphEngine:
                     metadata["code_executed"] = code_or_prompt
 
                 # Extract decision result
-                # The executor MUST set branch_decision in context
-                decision_result = context.get("branch_decision")
+                # The executor MUST set {node_id}_decision in context
+                decision_key = f"{node.id}_decision"
+                decision_result = context.get(decision_key)
 
                 if decision_result is None:
-                    # NO FALLBACK: Si el executor no agregó branch_decision, es un error
+                    # NO FALLBACK: Si el executor no agregó {node_id}_decision, es un error
                     error_msg = (
-                        f"DecisionNode {node.id} did not set 'branch_decision' in context. "
+                        f"DecisionNode {node.id} did not set '{decision_key}' in context. "
                         f"Available context keys: {list(context.get_all().keys())}"
                     )
                     logger.error(error_msg)
@@ -419,7 +422,7 @@ class GraphEngine:
                     decision_str = decision_result.lower()
                 else:
                     error_msg = (
-                        f"DecisionNode {node.id} set 'branch_decision' to unsupported type: "
+                        f"DecisionNode {node.id} set '{decision_key}' to unsupported type: "
                         f"{type(decision_result).__name__} = {decision_result}. "
                         f"Expected bool or str."
                     )

@@ -83,7 +83,8 @@ class CodeGeneratorAgent(BaseAgent):
         task: str,
         context_state: ContextState,
         error_history: List[Dict] = None,
-        node_type: Optional[str] = None
+        node_type: Optional[str] = None,
+        node_id: Optional[str] = None
     ) -> AgentResponse:
         """
         Genera código Python que resuelve la tarea.
@@ -93,6 +94,7 @@ class CodeGeneratorAgent(BaseAgent):
             context_state: Estado del contexto
             error_history: Errores de intentos previos (para retry)
             node_type: Tipo de nodo ("action", "decision", etc.) - opcional
+            node_id: ID del nodo (usado para DecisionNodes) - opcional
 
         Returns:
             AgentResponse con:
@@ -392,15 +394,18 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
 
         # Add special instructions for DecisionNode
         if node_type == "decision":
-            prompt += """
+            # Determinar la key de decisión basada en node_id
+            decision_key = f"{node_id}_decision" if node_id else "branch_decision"
+
+            prompt += f"""
 **🔀 IMPORTANTE - ESTE ES UN NODO DE DECISIÓN (DecisionNode):**
 
 Los DecisionNodes evalúan una condición y deciden qué rama del workflow seguir.
 Tu código DEBE:
 
 1. **Evaluar la condición** descrita en la tarea
-2. **Establecer `context['branch_decision']`** con el valor de la rama a seguir
-3. El valor de `branch_decision` debe ser un string que coincida con las condiciones definidas en el workflow
+2. **Establecer `context['{decision_key}']`** con el valor de la rama a seguir
+3. El valor de `{decision_key}` debe ser un string que coincida con las condiciones definidas en el workflow
 
 **Ejemplo de código para DecisionNode:**
 
@@ -408,26 +413,26 @@ Tu código DEBE:
 # Evaluar la condición (ejemplo: verificar si hay PDF adjunto)
 has_pdf = len(context.get('email_attachments', [])) > 0
 
-# REQUERIDO: Establecer branch_decision con 'true' o 'false'
+# REQUERIDO: Establecer {decision_key} con 'true' o 'false'
 if has_pdf:
-    context['branch_decision'] = 'true'
+    context['{decision_key}'] = 'true'
 else:
-    context['branch_decision'] = 'false'
+    context['{decision_key}'] = 'false'
 
 # IMPORTANTE: Imprimir SOLO los cambios realizados, no todo el contexto
 # Esto evita sobrescribir datos existentes que no cambiaron
-context_updates = {
-    'branch_decision': context['branch_decision']
+context_updates = {{
+    '{decision_key}': context['{decision_key}']
     # Solo incluye las keys que modificaste
-}
-print(json.dumps({
+}}
+print(json.dumps({{
     "status": "success",
     "context_updates": context_updates
-}, ensure_ascii=False))
+}}, ensure_ascii=False))
 ```
 
 ⚠️ **CRÍTICO:**
-- El código DEBE establecer `context['branch_decision']` o fallará
+- El código DEBE establecer `context['{decision_key}']` o fallará
 - Los valores típicos son: 'true', 'false', 'yes', 'no', 'approved', 'rejected', etc.
 - ⚠️ SOLO imprime las keys que MODIFICASTE, NO todo el contexto
 """

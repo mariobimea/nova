@@ -238,18 +238,22 @@ class CachedExecutor(ExecutorStrategy):
         logger.info(f"   Timeout: {timeout}s")
 
         try:
-            # Extract node_type from node dict if available
+            # Extract node_type and node_id from node dict if available
             node_type = None
+            node_id = None
             if node and isinstance(node, dict):
                 node_type = node.get("type")
+                node_id = node.get("id")
                 logger.info(f"   Node type: {node_type}")
+                logger.info(f"   Node ID: {node_id}")
 
             # Execute workflow using orchestrator
             result = await self.orchestrator.execute_workflow(
                 task=prompt_task,
                 context=context,
                 timeout=timeout,
-                node_type=node_type  # Pass node type to orchestrator
+                node_type=node_type,  # Pass node type to orchestrator
+                node_id=node_id  # Pass node ID to orchestrator
             )
 
             logger.info(f"✅ Multi-Agent execution completed successfully")
