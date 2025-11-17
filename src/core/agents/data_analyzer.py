@@ -81,50 +81,102 @@ class DataAnalyzerAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
-    def _summarize_value(self, value, max_depth=2, current_depth=0):
+    def _summarize_value(self, value, max_depth=4, current_depth=0):
         """
-        Recursively summarize values to provide better context schema.
-        Similar to CodeGenerator but optimized for analysis.
+        Truncamiento inteligente: solo trunca data "opaca" (PDFs base64, CSVs largos, etc).
+        Preserva dicts/listas normales completos para que el LLM los pueda leer.
+
+        TRUNCA:
+        - Strings > 1000 chars (PDFs base64, CSVs largos, emails largos)
+        - Detecta y marca tipos específicos (PDF, imagen, CSV, etc)
+
+        NO TRUNCA:
+        - Strings < 500 chars
+        - Dicts/listas normales (hasta depth=4)
+        - Números, booleanos, None
         """
+        # Prevent infinite recursion
         if current_depth >= max_depth:
-            return f"<max depth: {type(value).__name__}>"
+            return f"<max depth reached: {type(value).__name__}>"
 
         if isinstance(value, str):
-            # Detect base64 encoded PDFs
-            if len(value) > 10000 and value.startswith("JVBERi"):
-                return f"<base64 PDF: {len(value)} chars>"
-            elif len(value) > 100:
-                return f"<string: {len(value)} chars>"
-            return value
+            # 1. Detectar PDFs en base64 (empiezan con "JVBERi")
+            if len(value) > 1000 and value.startswith("JVBERi"):
+                return f"<base64 PDF: {len(value)} chars, starts with JVBERi>"
+
+            # 2. Detectar imágenes PNG en base64 (empiezan con "iVBOR")
+            elif len(value) > 1000 and value.startswith("iVBOR"):
+                return f"<base64 image (PNG): {len(value)} chars, starts with iVBOR>"
+
+            # 3. Detectar imágenes JPEG en base64 (empiezan con "/9j/")
+            elif len(value) > 1000 and value.startswith("/9j/"):
+                return f"<base64 image (JPEG): {len(value)} chars, starts with /9j/>"
+
+            # 4. Detectar CSVs largos (tienen líneas con comas/tabs)
+            elif len(value) > 1000 and ("\n" in value and ("," in value or "\t" in value)):
+                line_count = value.count("\n")
+                return f"<CSV data: {len(value)} chars, ~{line_count} lines>"
+
+            # 5. Strings muy largos genéricos
+            elif len(value) > 1000:
+                return f"<long string: {len(value)} chars>"
+
+            # 6. Strings medianos (500-1000 chars) - mostrar preview
+            elif len(value) > 500:
+                return f"<string: {len(value)} chars, preview: {value[:100]}...>"
+
+            # 7. Strings cortos/normales - pasar completos
+            else:
+                return value
 
         elif isinstance(value, (int, float, bool, type(None))):
+            # Números y booleanos siempre completos
             return value
+
+        elif isinstance(value, bytes):
+            # Bytes - detectar formato si es posible
+            if value.startswith(b"%PDF"):
+                return f"<bytes PDF: {len(value)} bytes>"
+            elif value.startswith(b"\x89PNG"):
+                return f"<bytes PNG image: {len(value)} bytes>"
+            elif value.startswith(b"\xff\xd8\xff"):
+                return f"<bytes JPEG image: {len(value)} bytes>"
+            else:
+                return f"<bytes: {len(value)} bytes>"
 
         elif isinstance(value, list):
             if len(value) == 0:
                 return []
 
-            # Show structure of first item
-            summarized_items = []
-            for item in value[:2]:  # Max 2 items for analysis
-                summarized_items.append(self._summarize_value(item, max_depth, current_depth + 1))
-
-            if len(value) > 2:
-                summarized_items.append(f"... (+{len(value)-2} more)")
-
-            return summarized_items
+            # ✅ CAMBIO CRÍTICO: Mostrar TODA la lista (no solo 2 items)
+            # Solo limitar si la lista es MUY grande (>100 items)
+            if len(value) > 100:
+                # Lista muy grande - mostrar primeros 5 items
+                summarized_items = []
+                for item in value[:5]:
+                    summarized_items.append(self._summarize_value(item, max_depth, current_depth + 1))
+                summarized_items.append(f"... (+{len(value)-5} more items)")
+                return summarized_items
+            else:
+                # Lista normal - mostrar COMPLETA
+                return [
+                    self._summarize_value(item, max_depth, current_depth + 1)
+                    for item in value
+                ]
 
         elif isinstance(value, dict):
             if len(value) == 0:
                 return {}
 
-            # Summarize dict values
+            # ✅ CAMBIO CRÍTICO: Mostrar TODO el dict (no truncar)
+            # Recursivamente resumir valores pero mantener todas las keys
             return {
                 k: self._summarize_value(v, max_depth, current_depth + 1)
                 for k, v in value.items()
             }
 
         else:
+            # Otros tipos desconocidos
             return f"<{type(value).__name__}>"
 
     async def _generate_analysis_code(
@@ -148,13 +200,55 @@ class DataAnalyzerAgent(BaseAgent):
         for key, value in context.items():
             context_schema[key] = self._summarize_value(value)
 
-        prompt = f"""Genera código Python que ANALIZA la estructura y contenido de estos datos.
+        prompt = f"""Genera código Python que ANALIZA ÚNICAMENTE data "opaca" que el LLM no puede leer directamente.
 
-NO resuelvas ninguna tarea, solo ENTIENDE qué es la data.
+🎯 **TU ROL: Analizar SOLO data truncada**
+
+El schema del contexto abajo YA muestra la mayoría de la información (dicts, listas, strings cortos).
+TU TRABAJO es analizar ÚNICAMENTE valores que aparecen truncados con marcadores como:
+- "<base64 PDF: N chars, starts with JVBERi>"
+- "<base64 image (PNG): N chars, starts with iVBOR>"
+- "<CSV data: N chars, ~N lines>"
+- "<long string: N chars>"
+- "<bytes: N bytes>"
 
 **Contexto disponible (variable 'context'):**
 La variable `context` es un diccionario que YA EXISTE con EXACTAMENTE estas keys:
 {json.dumps(context_schema, indent=2, ensure_ascii=False)}
+
+✅ **DEBES analizar** (valores truncados):
+- PDFs en base64 → Decodificar, detectar páginas, ver si tiene texto extraíble
+- Imágenes en base64 → Decodificar, detectar dimensiones, formato
+- CSVs largos → Parsear estructura, columnas, tipos de datos
+- Archivos binarios → Detectar formato, validez
+
+❌ **NO DEBES analizar** (valores ya visibles):
+- Strings cortos/medios que ya están completos en el schema
+- Números, booleanos (ya visibles)
+- Dicts/listas normales que ya están completos
+- Metadata que ya está estructurada
+
+**Ejemplo de qué analizar**:
+```
+Schema muestra:
+{
+  "email_subject": "Invoice #123",           ← Ya visible, NO analizar
+  "products": [                              ← Ya visible, NO analizar
+    {"name": "Product A", "price": 100}
+  ],
+  "attachments": [
+    {
+      "filename": "invoice.pdf",
+      "data": "<base64 PDF: 50000 chars>"    ← Truncado, SÍ analizar esto
+    }
+  ]
+}
+
+Tu código debe:
+✅ Analizar attachments[0]['data'] (decodificar PDF, ver páginas, texto)
+❌ NO analizar email_subject (ya visible)
+❌ NO analizar products (ya visible)
+```
 
 **Reglas CRÍTICAS:**
 1. ⚠️ El dict `context` YA EXISTE - NO lo definas ni copies valores
@@ -163,6 +257,7 @@ La variable `context` es un diccionario que YA EXISTE con EXACTAMENTE estas keys
 4. ⚠️ Si una key no aparece en el schema arriba, NO la uses en tu código
 5. Accede a la data así: `value = context['key_name']` donde 'key_name' es UNA de las keys listadas arriba
 6. NO hagas `context = {{...}}` - el contexto ya está disponible
+7. ⚠️ Solo analiza valores marcados como truncados (con "<...>")
 
 ⚠️ IMPORTANTE: Este es solo el ESQUEMA del contexto (valores resumidos).
 NO copies estos valores al código. Usa `context['key']` para acceder a los valores reales.
@@ -200,9 +295,7 @@ Ejemplos de insights NO ÚTILES (NO HAGAS ESTO):
 - ❌ {"email_user": "str", "email_password": "str"} → Esto es inútil, solo dice el tipo
 - ❌ {"data": "bytes"} → No ayuda, falta info sobre QUÉ contiene esos bytes
 
-Insights BUENOS (SÍ HAGAS ESTO):
-- ✅ {"email_attachments": [{"filename": "invoice.pdf", "size_kb": 45, "appears_to_be_pdf": true}]}
-- ✅ {"pdf_data": {"is_base64": false, "size_bytes": 45231, "starts_with_pdf_magic": true}}
+
 
 **IMPORTANTE:**
 - Inspecciona VALORES REALES, no solo tipos (NO uses type().__name__ como único insight)
@@ -275,8 +368,19 @@ Insights BUENOS (SÍ HAGAS ESTO):
         """
         # 1. Intentar obtener de context (forma preferida)
         if "insights" in execution_result:
+            insights = execution_result["insights"]
+
+            # ✅ NUEVO: Validar que sea un dict
+            if not isinstance(insights, dict):
+                self.logger.warning(f"⚠️ Insights no es dict: {type(insights)}")
+                return {
+                    "type": "error",
+                    "error": f"Insights must be dict, got {type(insights).__name__}",
+                    "raw_value": str(insights)[:200]  # Preview truncado
+                }
+
             self.logger.info("✅ Insights encontrados en context")
-            return execution_result["insights"]
+            return insights
 
         # 2. Intentar parsear del stdout
         if "_stdout" in execution_result:
@@ -290,8 +394,19 @@ Insights BUENOS (SÍ HAGAS ESTO):
                     if line.startswith("{"):
                         data = json.loads(line)
                         if "insights" in data:
+                            insights = data["insights"]
+
+                            # ✅ NUEVO: Validar que sea un dict
+                            if not isinstance(insights, dict):
+                                self.logger.warning(f"⚠️ Insights parseados no es dict: {type(insights)}")
+                                return {
+                                    "type": "error",
+                                    "error": f"Insights must be dict, got {type(insights).__name__}",
+                                    "raw_value": str(insights)[:200]
+                                }
+
                             self.logger.info("✅ Insights parseados del stdout")
-                            return data["insights"]
+                            return insights
             except json.JSONDecodeError as e:
                 self.logger.warning(f"No se pudo parsear JSON del stdout: {e}")
 

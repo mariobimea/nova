@@ -14,6 +14,7 @@ Características:
 from typing import Dict, List, Optional
 import logging
 import time
+import json
 from datetime import datetime
 from dataclasses import asdict
 
@@ -388,10 +389,19 @@ class MultiAgentOrchestrator:
 
                         if not insights_val.success or not insights_val.data["valid"]:
                             error_msg = f"Insights inválidos: {insights_val.data.get('reason', 'unknown')}"
+
+                            # 🔥 NUEVO: Logging detallado para debugging
                             self.logger.warning(f"⚠️ {error_msg}")
+                            self.logger.warning(f"   📊 Insights rechazados:")
+                            self.logger.warning(f"   {json.dumps(insights, indent=6, ensure_ascii=False)}")
+
+                            suggestions = insights_val.data.get("suggestions", [])
+                            if suggestions:
+                                self.logger.warning(f"   💡 Suggestions del validator:")
+                                for i, sug in enumerate(suggestions, 1):
+                                    self.logger.warning(f"      {i}. {sug}")
 
                             # Agregar suggestions al feedback
-                            suggestions = insights_val.data.get("suggestions", [])
                             analysis_errors.append({
                                 "stage": "analysis_validation",
                                 "error": error_msg,

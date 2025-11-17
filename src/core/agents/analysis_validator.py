@@ -161,34 +161,50 @@ Devuelve JSON:
   "suggestions": ["sugerencia 1", "sugerencia 2"]  // solo si invalid
 }
 
-🔴 Los insights son INVÁLIDOS si:
-1. **Sin estructura** → El resultado es un string genérico sin metadata útil
-2. **Type desconocido** → type = "unknown" (no pudo detectar qué tipo de datos es)
-3. **Metadata vacía** → Tiene type definido pero TODAS las demás keys están vacías/null/missing
-4. **Error de ejecución** → Contiene key "error" indicando que el código falló
+🔴 Los insights son INVÁLIDOS SOLO si:
+1. **Crash de ejecución** → El código crasheó con traceback de Python (contiene "Traceback", "Error:", stack trace)
+2. **Sin output estructurado** → No retornó ningún dict ni JSON parseado, solo un string sin estructura
+3. **Error explícito SIN metadata** → Solo dice {"error": "..."} sin ninguna info adicional útil
 
 🟢 Los insights son VÁLIDOS si:
-1. **Metadata estructurada** → Contiene información organizada (no solo un string)
-2. **Type identificado** → Detectó el tipo de datos (pdf, image, email, etc.)
-3. **Keys útiles** → Tiene metadata relevante aunque sea parcial (ej: pages, format, size, etc.)
-4. **Sin errores reales** → No hay crashes ni fallos de ejecución
-5. **Ayuda a la tarea** → La información es útil para el siguiente paso del workflow
+1. **Retorna dict estructurado** → Aunque sea mínimo como {"type": "pdf"} es válido
+2. **Describe algo sobre la data** → Aunque sea parcial o básico, si describe algo es válido
+3. **Valores falsy son VÁLIDOS** → 0, False, [], {} son información ÚTIL (ej: "pages": 0 significa PDF vacío)
+4. **Type unknown CON contexto** → Si explica por qué: {"type": "unknown", "reason": "corrupted"} es VÁLIDO
+5. **Error CON metadata parcial** → {"error": "...", "partial_info": {...}} es VÁLIDO (dio algo de info)
 
+⚠️ **SÉ PERMISIVO - Los insights son DESCRIPTIVOS, NO RESOLUTIVOS:**
+- ❌ NO rechaces por "falta de detalles" → Insights parciales/mínimos son OK
+- ❌ NO rechaces por "metadata vacía" si tiene valores falsy (0, False, [])
+- ❌ NO rechaces por "type unknown" si explica el motivo
+- ❌ NO rechaces por "debería incluir más info" → NO exijas exhaustividad
+- ✅ Acepta análisis mínimos pero correctos
+- ✅ Distingue "código crasheó" (INVÁLIDO) vs "data vacía/corrupta" (VÁLIDO)
 
-**IMPORTANTE - LOS INSIGHTS SON DESCRIPTIVOS, NO RESOLUTIVOS:**
-- ⚠️ El DataAnalyzer solo ANALIZA la data, NO la procesa ni resuelve la tarea
-- ⚠️ Los insights son METADATA INFORMATIVA para que el CodeGenerator sepa qué estrategia usar
-- Sé CRÍTICO pero evalúa si los insights DESCRIBEN la data, no si RESUELVEN la tarea
-- Compara: ¿Los insights informan sobre la ESTRUCTURA/CARACTERÍSTICAS de la data? Sí/No
-- Metadata estructurada aunque sea parcial → VÁLIDO
-- Distingue "código falló" (crash) vs "código funcionó pero detectó que no hay datos"
+**Ejemplos de insights VÁLIDOS (acepta estos)**:
+✅ {"type": "pdf", "pages": 0} → Describe que el PDF está vacío (falsy value OK)
+✅ {"type": "email", "attachments": []} → Describe que no hay attachments (lista vacía OK)
+✅ {"type": "unknown", "reason": "file corrupted"} → Explica por qué no detectó (OK)
+✅ {"type": "pdf", "size": 1024} → Mínimo pero útil (OK)
+✅ {"type": "csv", "rows": 100} → Básico pero suficiente (OK)
 
-🎯 Pregunta clave: ¿Los insights proporcionan información útil SOBRE LA DATA para guiar al CodeGenerator?
+**Ejemplos de insights INVÁLIDOS (rechaza SOLO estos)**:
+❌ {"error": "Traceback (most recent call last)..."} → Código crasheó SIN metadata
+❌ "No data found" → String sin estructura (no es dict)
+❌ {} → Dict completamente vacío sin ninguna info
+❌ {"error": "Failed"} → Error genérico sin contexto ni metadata
+
+🎯 Pregunta clave: ¿El análisis se ejecutó correctamente y retornó ALGUNA información estructurada?
 
 **Tu reason debe explicar**:
-- ¿Qué tipo de información se esperaba según la tarea?
-- ¿Qué se obtuvo realmente en los insights?
-- ¿Por qué es válido/inválido?
-- Si es inválido: ¿Qué debería mejorarse en el análisis? (insight para retry)
+- Si VÁLIDO: "Los insights describen [X] sobre la data, suficiente para el CodeGenerator"
+- Si INVÁLIDO: "El código crasheó con error: [traceback]" o "No retornó estructura"
+
+**NO digas** (evitar estas frases que son demasiado estrictas):
+❌ "Falta información sobre..."
+❌ "Metadata insuficiente..."
+❌ "Debería incluir más detalles sobre..."
+
+Recuerda: Tu trabajo es validar que el ANÁLISIS funcionó, no que sea exhaustivo o perfecto.
 """
         return prompt

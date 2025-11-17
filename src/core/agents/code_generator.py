@@ -172,50 +172,102 @@ class CodeGeneratorAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
-    def _summarize_value(self, value, max_depth=3, current_depth=0):
+    def _summarize_value(self, value, max_depth=4, current_depth=0):
         """
-        Recursively summarize values to prevent token overflow.
-        Handles nested dicts, lists, and long strings at any depth.
+        Truncamiento inteligente: solo trunca data "opaca" (PDFs base64, CSVs largos, etc).
+        Preserva dicts/listas normales completos para que el LLM los pueda leer.
+
+        TRUNCA:
+        - Strings > 1000 chars (PDFs base64, CSVs largos, emails largos)
+        - Detecta y marca tipos específicos (PDF, imagen, CSV, etc)
+
+        NO TRUNCA:
+        - Strings < 500 chars
+        - Dicts/listas normales (hasta depth=4)
+        - Números, booleanos, None
         """
         # Prevent infinite recursion
         if current_depth >= max_depth:
             return f"<max depth reached: {type(value).__name__}>"
 
         if isinstance(value, str):
-            if len(value) > 100:
-                return f"<string: {len(value)} chars>"
-            return value
+            # 1. Detectar PDFs en base64 (empiezan con "JVBERi")
+            if len(value) > 1000 and value.startswith("JVBERi"):
+                return f"<base64 PDF: {len(value)} chars, starts with JVBERi>"
+
+            # 2. Detectar imágenes PNG en base64 (empiezan con "iVBOR")
+            elif len(value) > 1000 and value.startswith("iVBOR"):
+                return f"<base64 image (PNG): {len(value)} chars, starts with iVBOR>"
+
+            # 3. Detectar imágenes JPEG en base64 (empiezan con "/9j/")
+            elif len(value) > 1000 and value.startswith("/9j/"):
+                return f"<base64 image (JPEG): {len(value)} chars, starts with /9j/>"
+
+            # 4. Detectar CSVs largos (tienen líneas con comas/tabs)
+            elif len(value) > 1000 and ("\n" in value and ("," in value or "\t" in value)):
+                line_count = value.count("\n")
+                return f"<CSV data: {len(value)} chars, ~{line_count} lines>"
+
+            # 5. Strings muy largos genéricos
+            elif len(value) > 1000:
+                return f"<long string: {len(value)} chars>"
+
+            # 6. Strings medianos (500-1000 chars) - mostrar preview
+            elif len(value) > 500:
+                return f"<string: {len(value)} chars, preview: {value[:100]}...>"
+
+            # 7. Strings cortos/normales - pasar completos
+            else:
+                return value
 
         elif isinstance(value, (int, float, bool, type(None))):
+            # Números y booleanos siempre completos
             return value
+
+        elif isinstance(value, bytes):
+            # Bytes - detectar formato si es posible
+            if value.startswith(b"%PDF"):
+                return f"<bytes PDF: {len(value)} bytes>"
+            elif value.startswith(b"\x89PNG"):
+                return f"<bytes PNG image: {len(value)} bytes>"
+            elif value.startswith(b"\xff\xd8\xff"):
+                return f"<bytes JPEG image: {len(value)} bytes>"
+            else:
+                return f"<bytes: {len(value)} bytes>"
 
         elif isinstance(value, list):
             if len(value) == 0:
                 return []
 
-            # Summarize list items recursively
-            summarized_items = []
-            for item in value[:3]:  # Max 3 items
-                summarized_items.append(self._summarize_value(item, max_depth, current_depth + 1))
-
-            if len(value) > 3:
-                summarized_items.append(f"... (+{len(value)-3} more)")
-
-            return summarized_items
+            # ✅ CAMBIO CRÍTICO: Mostrar TODA la lista (no solo 3 items)
+            # Solo limitar si la lista es MUY grande (>100 items)
+            if len(value) > 100:
+                # Lista muy grande - mostrar primeros 5 items
+                summarized_items = []
+                for item in value[:5]:
+                    summarized_items.append(self._summarize_value(item, max_depth, current_depth + 1))
+                summarized_items.append(f"... (+{len(value)-5} more items)")
+                return summarized_items
+            else:
+                # Lista normal - mostrar COMPLETA
+                return [
+                    self._summarize_value(item, max_depth, current_depth + 1)
+                    for item in value
+                ]
 
         elif isinstance(value, dict):
             if len(value) == 0:
                 return {}
 
-            # Summarize dict values recursively
-            summarized_dict = {}
-            for k, v in value.items():
-                summarized_dict[k] = self._summarize_value(v, max_depth, current_depth + 1)
-
-            return summarized_dict
+            # ✅ CAMBIO CRÍTICO: Mostrar TODO el dict (no truncar)
+            # Recursivamente resumir valores pero mantener todas las keys
+            return {
+                k: self._summarize_value(v, max_depth, current_depth + 1)
+                for k, v in value.items()
+            }
 
         else:
-            # Unknown type
+            # Otros tipos desconocidos
             return f"<{type(value).__name__}>"
 
     def _build_prompt(
