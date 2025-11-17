@@ -54,7 +54,7 @@ class KnowledgeManager:
 
         SMART DETECTION for PDF extraction:
         - If context has 'recommended_extraction_method' = 'pymupdf' → load PyMuPDF docs
-        - If context has 'recommended_extraction_method' = 'ocr' → load EasyOCR docs
+        - If context has 'recommended_extraction_method' = 'ocr' → load Google Vision OCR docs
         - If context has both 'pdf_data' and mentions method in task → load specific doc
         - Otherwise → use standard keyword detection
 
@@ -80,7 +80,7 @@ class KnowledgeManager:
             'pymupdf': ['pdf', 'pymupdf', 'fitz', 'text layer', 'extract text'],
             'postgres': ['database', 'db', 'save', 'store', 'query', 'insert', 'update', 'postgres', 'sql'],
             'regex': ['pattern', 'regex', 'search text', 'extract amount', 'find', 'match'],
-            'easyocr': ['ocr', 'easyocr', 'scan', 'scanned', 'image to text', 'recognize text', 'optical']
+            'google_vision': ['ocr', 'vision', 'scan', 'scanned', 'image to text', 'recognize text', 'optical', 'document text']
         }
 
         for integration, keywords in integration_keywords.items():
@@ -96,7 +96,7 @@ class KnowledgeManager:
             'pymupdf': ['pdf_filename', 'pdf_text', 'pdf_data'],
             'postgres': ['invoice_id', 'db_table', 'sql_query'],
             'regex': ['pdf_text', 'total_amount', 'amount_found'],
-            'easyocr': ['invoice_image_path', 'image_path', 'scanned_pdf', 'ocr_text']
+            'google_vision': ['invoice_image_path', 'image_path', 'scanned_pdf', 'ocr_text']
         }
 
         for integration, hint_keys in context_key_hints.items():
@@ -115,14 +115,14 @@ class KnowledgeManager:
             # Note: Don't remove OCR - it might still be useful for hybrid PDFs
 
         elif recommended_method == 'ocr':
-            # PDF scanned/hybrid → Use OCR
-            detected.add('easyocr')
+            # PDF scanned/hybrid → Use Google Cloud Vision OCR
+            detected.add('google_vision')
             # Note: Don't remove PyMuPDF - OCR needs PDF library to convert pages to images
 
         # DEPENDENCY SYSTEM: Automatically load required integrations
         # Define which integrations depend on others
         integration_dependencies = {
-            'easyocr': ['pymupdf'],  # OCR needs PyMuPDF for converting PDF pages to images
+            'google_vision': ['pymupdf'],  # Google Vision OCR needs PyMuPDF for converting PDF pages to images
             # Future examples:
             # 'smtp': ['regex'],  # SMTP might need regex for email templates
         }
@@ -280,7 +280,7 @@ class KnowledgeManager:
 
         Args:
             task: Task description for semantic search
-            integrations: List of integration names (e.g., ["pymupdf", "easyocr"])
+            integrations: List of integration names (e.g., ["pymupdf", "google_vision"])
             top_k_per_integration: How many chunks to retrieve per integration
 
         Returns:
@@ -483,12 +483,13 @@ class KnowledgeManager:
                         "- No extra print statements or text before/after the JSON\n\n"
                     )
 
-                elif "ocr" in error_lower or "easyocr" in error_lower:
+                elif "ocr" in error_lower or "vision" in error_lower:
                     sections.append(
-                        "💡 **Hint:** EasyOCR issue detected. Remember:\n"
-                        "- EasyOCR CANNOT read PDF bytes directly\n"
+                        "💡 **Hint:** Google Cloud Vision OCR issue detected. Remember:\n"
+                        "- Vision API CANNOT read PDF bytes directly\n"
                         "- You must convert PDF to image first using PyMuPDF (fitz)\n"
-                        "- Example: `pix = page.get_pixmap(); img_bytes = pix.tobytes('png')`\n\n"
+                        "- Example: `pix = page.get_pixmap(dpi=300); img_bytes = pix.tobytes('png')`\n"
+                        "- Check authentication: Use GCP_SERVICE_ACCOUNT_JSON env var\n\n"
                     )
 
                 elif "timeout" in error_lower:
@@ -506,7 +507,7 @@ class KnowledgeManager:
                 "## YOUR TASK NOW\n\n"
                 "Fix the errors shown above and generate WORKING code.\n\n"
                 "Common mistakes to avoid:\n"
-                "❌ EasyOCR cannot read PDF bytes - convert to image first\n"
+                "❌ Google Cloud Vision cannot read PDF bytes - convert to image first\n"
                 "❌ Printing multiple JSON outputs - only ONE print(json.dumps(...)) at the end\n"
                 "❌ Not handling errors - always use try/except\n"
                 "❌ Forgetting to add extracted data to context_updates\n\n"

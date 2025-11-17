@@ -280,11 +280,17 @@ Si hay "suggestions", síguelas.
 
         prompt += """
 **El código debe:**
-1. Importar librerías necesarias (disponibles: PyMuPDF/fitz, pandas, PIL, email, json, csv, re, base64, easyocr, numpy)
+1. Importar librerías necesarias (disponibles: PyMuPDF/fitz, pandas, PIL, email, json, csv, re, base64, google-cloud-vision, numpy)
 2. Acceder a la data desde `context['key']` usando las keys que ves en el contexto schema arriba
 3. Analizar el CONTENIDO REAL de la data (NO solo usar type())
 4. Crear un dict `insights` con información ÚTIL y DESCRIPTIVA
 5. **IMPRIMIR** los insights en JSON al final: `print(json.dumps({"insights": insights}, ensure_ascii=False))`
+
+⚠️ **IMPORTANTE sobre formato base64**:
+- Los valores base64 en el contexto son BASE64 PURO (sin prefijos)
+- NO tienen formato "data:application/pdf;base64,XXXXX"
+- Decodifícalos directamente: `base64.b64decode(value)` (NO hagas `.split(",")[1]`)
+- Ejemplo: Si ves "<base64 PDF: 50000 chars>", usa `pdf_bytes = base64.b64decode(context['pdf_data'])`
 
 **¿Qué insights son ÚTILES?**
 El objetivo es ayudar al siguiente agente (CodeGenerator) a entender CÓMO procesar la data.

@@ -39,7 +39,7 @@ class CodeGeneratorAgent(BaseAgent):
                     "description": (
                         "Busca documentación oficial de librerías Python en la base de conocimiento. "
                         "Usa esto cuando necesites ejemplos de código, sintaxis, o mejores prácticas para "
-                        "librerías como PyMuPDF, EasyOCR, pandas, etc."
+                        "librerías como PyMuPDF, Google Cloud Vision, pandas, etc."
                     ),
                     "parameters": {
                         "type": "object",
@@ -48,10 +48,11 @@ class CodeGeneratorAgent(BaseAgent):
                                 "type": "string",
                                 "description": (
                                     "Nombre de la librería a buscar. "
-                                    "Valores disponibles: 'pymupdf', 'easyocr', 'imap', 'smtp', 'postgres', 'regex'. "
-                                    "Para emails: usa 'imap' para leer o 'smtp' para enviar"
+                                    "Valores disponibles: 'pymupdf', 'google_vision', 'imap', 'smtp', 'postgres', 'regex'. "
+                                    "Para emails: usa 'imap' para leer o 'smtp' para enviar. "
+                                    "Para OCR: usa 'google_vision'"
                                 ),
-                                "enum": ["pymupdf", "easyocr", "imap", "smtp", "postgres", "regex"]
+                                "enum": ["pymupdf", "google_vision", "imap", "smtp", "postgres", "regex"]
                             },
                             "query": {
                                 "type": "string",
@@ -337,8 +338,8 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
 - Analiza esta información ANTES de elegir tu estrategia de implementación
 
 **Ejemplos de uso:**
-- Si `has_text_layer: false` → Usa EasyOCR para extraer texto de PDF escaneado
-- Si `type: image` con `has_text: false` → Usa OCR o descripción visual según la tarea
+- Si `has_text_layer: false` → Usa Google Cloud Vision API para extraer texto de PDF escaneado
+- Si `type: image` con `has_text: false` → Usa Google Cloud Vision OCR según la tarea
 - Si `attachment_count: 0` → No intentes procesar attachments inexistentes
 """
 
@@ -479,7 +480,7 @@ print(json.dumps({
         Busca documentación usando nova-rag service.
 
         Args:
-            library: Librería a buscar (pymupdf, easyocr, etc.)
+            library: Librería a buscar (pymupdf, google_vision, etc.)
             query: Qué buscar
             top_k: Número de resultados (default: 3)
 

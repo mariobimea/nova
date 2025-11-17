@@ -23,7 +23,7 @@ def get_search_documentation_tool() -> Dict[str, Any]:
     - Make multiple searches iteratively to gather more context
 
     The RAG service uses vector embeddings to find semantically similar documentation
-    across all integrations (PyMuPDF, EasyOCR, IMAP, SMTP, PostgreSQL, Regex, etc.)
+    across all integrations (PyMuPDF, Google Cloud Vision, IMAP, SMTP, PostgreSQL, Regex, etc.)
 
     Returns:
         Tool definition dict compatible with OpenAI chat.completions API
@@ -49,7 +49,7 @@ def get_search_documentation_tool() -> Dict[str, Any]:
                 "Search NOVA's integration documentation for code examples, API references, "
                 "and usage patterns. Use this to find information about:\n"
                 "- PDF processing: PyMuPDF for text extraction, form parsing\n"
-                "- OCR: EasyOCR for optical character recognition on scanned documents\n"
+                "- OCR: Google Cloud Vision API for optical character recognition on scanned documents (98% accuracy)\n"
                 "- Email: IMAP for reading emails, SMTP for sending emails\n"
                 "- Database: PostgreSQL operations and queries\n"
                 "- Text processing: Regex patterns for data extraction\n\n"
