@@ -330,7 +330,7 @@ class E2BExecutor(ExecutorStrategy):
 
     def _inject_context(self, code: str, context: Dict[str, Any]) -> str:
         """
-        Inject context into code.
+        Inject context into code using base64 encoding for safety.
 
         Args:
             code: Original Python code
@@ -338,17 +338,18 @@ class E2BExecutor(ExecutorStrategy):
 
         Returns:
             Code with context injection
-        """
-        # CRITICAL: Use ensure_ascii=True for BOTH injection and output
-        # This prevents UnicodeEncodeError in E2B sandbox when context contains
-        # special characters like \xa0 (non-breaking space), accented characters, etc.
-        # Unicode characters are safely escaped as \uXXXX which works in all environments
-        context_json = json.dumps(context, ensure_ascii=True)
 
-        # Escape the JSON string for safe embedding in Python code
-        # Replace single quotes and backslashes to avoid breaking the Python string literal
-        # This ensures the JSON can contain ANY characters including newlines, quotes, etc.
-        escaped_json = context_json.replace('\\', '\\\\').replace("'", "\\'")
+        Uses base64 encoding to safely pass context with ANY characters
+        (including newlines, quotes, backslashes, nested JSON, etc.)
+        This is more robust than manual escaping.
+        """
+        import base64
+
+        # Serialize context to JSON
+        context_json = json.dumps(context, default=str)
+
+        # Encode to base64 to avoid any escaping issues
+        context_b64 = base64.b64encode(context_json.encode('utf-8')).decode('ascii')
 
         # Check if code already has a print statement
         # AI-generated code (from CachedExecutor) already includes print(json.dumps(...))
@@ -358,9 +359,12 @@ class E2BExecutor(ExecutorStrategy):
         if has_print:
             # Code already prints output - just inject context
             full_code = f"""import json
+import base64
 
-# Injected context (workflow state)
-context = json.loads('{escaped_json}')
+# Decode context from base64 (safe for ANY characters)
+_context_b64 = "{context_b64}"
+_context_json = base64.b64decode(_context_b64).decode('utf-8')
+context = json.loads(_context_json)
 
 # User code (already includes output print)
 {code}
@@ -368,16 +372,17 @@ context = json.loads('{escaped_json}')
         else:
             # Code doesn't print - add print statement for E2B
             full_code = f"""import json
+import base64
 
-# Injected context (workflow state)
-context = json.loads('{escaped_json}')
+# Decode context from base64 (safe for ANY characters)
+_context_b64 = "{context_b64}"
+_context_json = base64.b64decode(_context_b64).decode('utf-8')
+context = json.loads(_context_json)
 
 # User code
 {code}
 
-# Output updated context
-# Use ensure_ascii=True to avoid encoding issues with E2B stdout
-# Unicode characters will be escaped as \\uXXXX but remain valid JSON
+# Output updated context (use ensure_ascii for E2B stdout compatibility)
 print(json.dumps(context, ensure_ascii=True))
 """
 

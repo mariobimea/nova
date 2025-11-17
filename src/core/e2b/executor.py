@@ -157,16 +157,26 @@ class E2BExecutor:
         IMPORTANTE: NO agregamos print automático porque el código generado
         por el AI ya incluye su propio print con el formato:
         print(json.dumps({"status": "success", "context_updates": {...}}))
+
+        Uses base64 encoding to safely pass context with ANY characters
+        (including newlines, quotes, backslashes, etc.)
         """
-        # Serializar context de manera segura
+        import base64
+
+        # Serialize context to JSON
         context_json = json.dumps(context, default=str)
+
+        # Encode to base64 to avoid any escaping issues
+        context_b64 = base64.b64encode(context_json.encode('utf-8')).decode('ascii')
 
         return f"""
 import json
 import base64
 
-# Context disponible para el código del usuario
-context = json.loads('''{context_json}''')
+# Decode context from base64 (safe for ANY characters)
+_context_b64 = "{context_b64}"
+_context_json = base64.b64decode(_context_b64).decode('utf-8')
+context = json.loads(_context_json)
 
 # ==================== CÓDIGO DEL USUARIO ====================
 {code}
