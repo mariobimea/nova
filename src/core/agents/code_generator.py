@@ -494,19 +494,53 @@ print(json.dumps({
             return f"[Documentación de {library} no disponible - RAG client no configurado]"
 
         try:
-            # Buscar en RAG
-            results = await self.rag_client.search(
-                query=query,
-                library=library,
-                top_k=top_k
-            )
+            # 🔥 ESPECIAL: Para google_vision, siempre buscar autenticación ADEMÁS de la query original
+            # Esto garantiza que el LLM tenga ejemplos de cómo autenticar el cliente
+            all_results = []
 
-            if not results:
+            if library == "google_vision":
+                self.logger.info(f"🔍 Google Vision detectado - haciendo búsqueda dual (query + auth)")
+
+                # 1. Búsqueda original (e.g., "OCR from PDF")
+                results_query = await self.rag_client.search(
+                    query=query,
+                    library=library,
+                    top_k=top_k
+                )
+                all_results.extend(results_query or [])
+
+                # 2. Búsqueda de autenticación (SIEMPRE)
+                results_auth = await self.rag_client.search(
+                    query="authentication credentials service account E2B sandbox",
+                    library=library,
+                    top_k=2  # Solo 2 ejemplos de auth
+                )
+                all_results.extend(results_auth or [])
+
+                # 3. Búsqueda de workflow completo
+                results_workflow = await self.rag_client.search(
+                    query="complete workflow PDF OCR extract",
+                    library=library,
+                    top_k=2
+                )
+                all_results.extend(results_workflow or [])
+
+                self.logger.info(f"✅ Búsqueda dual completada: {len(all_results)} resultados totales")
+
+            else:
+                # Para otras librerías, búsqueda normal
+                all_results = await self.rag_client.search(
+                    query=query,
+                    library=library,
+                    top_k=top_k
+                )
+
+            if not all_results:
                 return f"[No se encontró documentación para {library} sobre '{query}']"
 
             # Formatear resultados para el LLM
             formatted_docs = []
-            for i, result in enumerate(results, 1):
+            for i, result in enumerate(all_results, 1):
                 score_pct = result['score'] * 100
                 formatted_docs.append(
                     f"### Ejemplo {i} (relevancia: {score_pct:.0f}%)\n"
