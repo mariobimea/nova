@@ -226,12 +226,30 @@ Devuelve JSON:
 
 ⚠️ CASOS ESPECIALES - DECISIONNODES:
 - **Si la tarea es "decide/evalúa/verifica si..."** → Es un DecisionNode
-- **DecisionNodes SOLO necesitan establecer una key de decisión** (ej: 'amount_decision', 'has_pdf_decision')
-- **El valor puede ser 'true'/'false', 'yes'/'no', etc.**
-- **Si se estableció la key de decisión con un valor válido → ES VÁLIDO** ✅
-- **NO importa cuál sea el valor** ('true' o 'false' ambos son válidos)
-- **Ejemplo válido**: amount_decision='false' cuando monto < 1000 ✅
-- **Ejemplo válido**: has_pdf_decision='true' cuando hay PDF ✅
+- **DecisionNodes deben:**
+  1. ✅ Establecer una key de decisión (ej: 'amount_decision', 'has_pdf_decision')
+  2. ✅ El valor debe tener SENTIDO LÓGICO según los datos del contexto
+
+- **VALIDA LA LÓGICA DE LA DECISIÓN:**
+  - Compara `context_before` con `context_after`
+  - Si la tarea dice "decide if X > Y", verifica que la decisión sea correcta
+  - Si la tarea dice "decide if has PDF", verifica que la decisión refleje la realidad
+
+- **Ejemplos de validación lógica:**
+  - ✅ VÁLIDO: Task="decide if amount > 1000", context has "total_amount": "1500,00" (€1500), result="true" ✅
+  - ❌ INVÁLIDO: Task="decide if amount > 1000", context has "total_amount": "279,00" (€279), result="true" ❌ (debería ser "false", 279 < 1000)
+  - ✅ VÁLIDO: Task="decide if amount > 1000", context has "total_amount": "279,00" (€279), result="false" ✅
+  - ✅ VÁLIDO: Task="decide if has PDF", context has "attachments": [...], result="true" ✅
+  - ❌ INVÁLIDO: Task="decide if has PDF", context has "attachments": [], result="true" ❌ (debería ser "false", no hay attachments)
+
+- **IMPORTANTE - Formato de números europeo:**
+  - En España: "279,00" significa 279 euros (coma = separador decimal)
+  - "1.234,56" significa 1234.56 euros (punto = separador de miles)
+  - Al validar comparaciones numéricas, interpreta correctamente el formato europeo
+  - Ejemplo: "279,00" < 1000 → decisión debe ser "false"
+  - Ejemplo: "1.500,00" > 1000 → decisión debe ser "true"
+
+- **IMPORTANTE:** NO solo valides que existe la key, **valida que el valor tenga sentido**
 
 ⚠️ CASOS ESPECIALES - OTROS:
 - Si hay context['error'] pero es INFORMATIVO (ej: "No unread emails found"),
