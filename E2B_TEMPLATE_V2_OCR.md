@@ -174,7 +174,7 @@ for (bbox, text, confidence) in results:
         extracted_text.append(text)
 
 # Store in context
-context['extracted_text'] = ' '.join(extracted_text)
+context['ocr_text'] = ' '.join(extracted_text)
 context['ocr_confidence'] = sum(r[2] for r in results) / len(results) if results else 0
 ```
 

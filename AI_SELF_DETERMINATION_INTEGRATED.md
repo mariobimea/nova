@@ -193,7 +193,7 @@ for page in doc:
     full_text += page.get_text()
 
 result = {
-    "extracted_text": full_text,
+    "ocr_text": full_text,
     "method_used": "pymupdf",
     "pages_processed": len(doc)
 }
@@ -249,7 +249,7 @@ Results now include AI self-determination metadata:
 
 ```python
 {
-    "extracted_text": "...",
+    "ocr_text": "...",
     "_ai_metadata": {
         "two_stage_enabled": True,
         "ai_self_determined": True,  # NEW!

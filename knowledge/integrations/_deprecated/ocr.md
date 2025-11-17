@@ -302,7 +302,7 @@ try:
     print(json.dumps({
         "status": "success",
         "context_updates": {
-            "extracted_text": full_text,
+            "ocr_text": full_text,
             "line_count": len(text_list)
         },
         "message": f"Extracted {len(text_list)} lines of text"

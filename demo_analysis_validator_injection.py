@@ -126,7 +126,7 @@ def demo():
        result = reader.readtext(np.array(img))
        extracted_text += " ".join([text for (bbox, text, prob) in result])
 
-   context['extracted_text'] = extracted_text
+   context['ocr_text'] = extracted_text
     """)
     print("   " + "─" * 76)
     print()

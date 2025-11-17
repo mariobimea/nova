@@ -49,7 +49,7 @@ async def test_code_generator_with_rag_tool_calling(code_generator_with_rag, moc
 import fitz
 doc = fitz.open(context['pdf_path'])
 text = doc[0].get_text()
-context['extracted_text'] = text
+context['ocr_text'] = text
 """
     mock_response_2.choices[0].message.tool_calls = None
 
