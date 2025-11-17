@@ -287,13 +287,16 @@ class CodeGeneratorAgent(BaseAgent):
         for key, value in context.items():
             context_schema[key] = self._summarize_value(value)
 
+        # Serializar context_schema fuera del f-string para evitar conflicto con {}
+        context_schema_json = json.dumps(context_schema, indent=2)
+
         prompt = f"""Genera código Python que resuelve esta tarea:
 
 **Tarea:** {task}
 
 **Contexto disponible (variable 'context'):**
 La variable `context` es un diccionario que YA EXISTE con estas keys:
-{json.dumps(context_schema, indent=2)}
+""" + context_schema_json + """
 
 ⚠️ IMPORTANTE: Este es solo el ESQUEMA del contexto (valores resumidos).
 NO copies estos valores al código. Usa `context['key']` para acceder a los valores reales.
@@ -301,24 +304,27 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
 
         # Agregar insights si existen
         if data_insights:
-            prompt += f"""
+            data_insights_json = json.dumps(data_insights, indent=2)
+            prompt += """
 **Insights sobre la data (DataAnalyzer):**
-{json.dumps(data_insights, indent=2)}
+""" + data_insights_json + """
 """
 
         # 🔥 NUEVO: Agregar reasoning del AnalysisValidator
         if analysis_validation:
+            reason = analysis_validation.get('reason', 'No reasoning available')
             prompt += f"""
 **Análisis de los insights (AnalysisValidator):**
-{analysis_validation.get('reason', 'No reasoning available')}
+{reason}
 """
 
             # Si hay suggestions, agregarlas
             suggestions = analysis_validation.get('suggestions', [])
             if suggestions:
-                prompt += f"""
+                suggestions_json = json.dumps(suggestions, indent=2, ensure_ascii=False)
+                prompt += """
 **Sugerencias para implementación:**
-{json.dumps(suggestions, indent=2, ensure_ascii=False)}
+""" + suggestions_json + """
 """
 
         # Continuar con el resto del prompt
@@ -338,9 +344,10 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
 
         # Agregar errores previos si es un retry
         if error_history:
-            prompt += f"""
+            error_history_json = json.dumps(error_history, indent=2)
+            prompt += """
 **⚠️ ERRORES PREVIOS (CORRÍGELOS):**
-{json.dumps(error_history, indent=2)}
+""" + error_history_json + """
 """
 
         prompt += """

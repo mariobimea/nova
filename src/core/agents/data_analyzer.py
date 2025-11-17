@@ -200,13 +200,17 @@ class DataAnalyzerAgent(BaseAgent):
         for key, value in context.items():
             context_schema[key] = self._summarize_value(value)
 
-        prompt = f"""Genera código Python que ANALIZA ÚNICAMENTE data "opaca" que el LLM no puede leer directamente.
+        # Serializar context_schema a JSON string (fuera del f-string para evitar problemas con {})
+        context_schema_json = json.dumps(context_schema, indent=2, ensure_ascii=False)
+
+        # Usar concatenación de strings en lugar de f-string para evitar conflicto con {} del JSON
+        prompt = """Genera código Python que ANALIZA ÚNICAMENTE data "opaca" que el LLM no puede leer directamente.
 
 🎯 **TU ROL: Analizar SOLO data truncada**
 
 El schema del contexto abajo YA muestra la mayoría de la información (dicts, listas, strings cortos).
 TU TRABAJO es analizar ÚNICAMENTE valores que aparecen truncados con marcadores como:
-- "<base64 PDF: N chars, starts with JVBERi>"
+- "<base64 PDF: N chars, starts with JVBORi>"
 - "<base64 image (PNG): N chars, starts with iVBOR>"
 - "<CSV data: N chars, ~N lines>"
 - "<long string: N chars>"
@@ -214,7 +218,7 @@ TU TRABAJO es analizar ÚNICAMENTE valores que aparecen truncados con marcadores
 
 **Contexto disponible (variable 'context'):**
 La variable `context` es un diccionario que YA EXISTE con EXACTAMENTE estas keys:
-{json.dumps(context_schema, indent=2, ensure_ascii=False)}
+""" + context_schema_json + """
 
 ✅ **DEBES analizar** (valores truncados):
 - PDFs en base64 → Decodificar, detectar páginas, ver si tiene texto extraíble
@@ -256,7 +260,7 @@ Tu código debe:
 3. ⚠️ NO inventes ni asumas nombres de keys que no estén en la lista
 4. ⚠️ Si una key no aparece en el schema arriba, NO la uses en tu código
 5. Accede a la data así: `value = context['key_name']` donde 'key_name' es UNA de las keys listadas arriba
-6. NO hagas `context = {{...}}` - el contexto ya está disponible
+6. NO hagas `context = {...}` - el contexto ya está disponible
 7. ⚠️ Solo analiza valores marcados como truncados (con "<...>")
 
 ⚠️ IMPORTANTE: Este es solo el ESQUEMA del contexto (valores resumidos).
@@ -265,9 +269,10 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
 
         # Agregar errores previos si es un retry
         if error_history:
-            prompt += f"""
+            error_history_json = json.dumps(error_history, indent=2, ensure_ascii=False)
+            prompt += """
 **⚠️ ERRORES PREVIOS (CORRÍGELOS):**
-{json.dumps(error_history, indent=2, ensure_ascii=False)}
+""" + error_history_json + """
 
 El código anterior falló. Revisa los errores y genera código corregido.
 Si hay "suggestions", síguelas.
