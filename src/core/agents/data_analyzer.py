@@ -177,39 +177,17 @@ Si hay "suggestions", síguelas.
 
         prompt += """
 **El código debe:**
-1. Importar librerías necesarias (disponibles: PyMuPDF/fitz, pandas, PIL, email, json, csv, re, base64)
-2. Acceder a la data desde `context['key']` (NO copies el contexto)
+1. Importar librerías necesarias (disponibles: PyMuPDF/fitz, pandas, PIL, email, json, csv, re, base64, easyocr, numpy)
+2. Acceder a la data desde `context['key']` usando las keys que ves en el contexto schema arriba
 3. Analizar estructura SIN procesar toda la data (sería lento - solo muestrea)
-4. Crear un dict `insights` con información útil
-5. **IMPRIMIR** los insights en JSON al final
-
-**Ejemplo para PDF:**
-```python
-import fitz
-import base64
-import json
-
-# Acceder al PDF desde el contexto (NO hardcodear)
-pdf_bytes = base64.b64decode(context['attachments'][0]['data'])
-doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-insights = {
-    "type": "pdf",
-    "pages": len(doc),
-    "has_text_layer": bool(doc[0].get_text()) if len(doc) > 0 else False,
-    "filename": context['attachments'][0].get('filename', 'unknown')
-}
-
-doc.close()
-
-# CRÍTICO: Imprimir insights en JSON
-print(json.dumps({"insights": insights}, ensure_ascii=False))
-```
+4. Crear un dict `insights` con información útil sobre el tipo, estructura y características de la data
+5. **IMPRIMIR** los insights en JSON al final: `print(json.dumps({"insights": insights}, ensure_ascii=False))`
 
 **IMPORTANTE:**
-- NO proceses toda la data (solo muestrea - ej: primera página del PDF)
+- NO proceses toda la data (solo muestrea - ej: primera página del PDF, primeras filas del CSV, etc.)
 - El dict `insights` debe ser serializable (no objetos complejos)
 - Maneja errores con try/except
+- Inspecciona el contexto schema para saber qué keys usar (NO asumas nombres de keys)
 - **SIN el print final, el código se considerará INVÁLIDO**
 
 **Output esperado:**

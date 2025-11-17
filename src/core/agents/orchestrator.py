@@ -633,6 +633,7 @@ class MultiAgentOrchestrator:
                         e2b_response = AgentResponse(
                             success=False,
                             error=error_msg,
+                            data={},  # 🔥 FIX: AgentResponse requiere data parameter
                             execution_time_ms=e2b_time_ms
                         )
 
