@@ -78,13 +78,11 @@ class ContextState:
     - El siguiente nodo recibe `current`
     - `initial` se mantiene inmutable para comparación
     - `data_insights` del DataAnalyzer para uso del CodeGenerator
-    - `analysis_validation` del AnalysisValidator (reasoning sobre los insights)
     """
 
     initial: Dict           # Contexto original (inmutable)
     current: Dict           # Contexto actual (modificable)
     data_insights: Optional[Dict] = None  # Del DataAnalyzer
-    analysis_validation: Optional[Dict] = None  # Del AnalysisValidator (reasoning + suggestions)
 
     def update_current(self, updates: Dict):
         """Actualiza el contexto actual con nuevos valores"""

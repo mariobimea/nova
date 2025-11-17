@@ -124,7 +124,6 @@ class CachedExecutor(ExecutorStrategy):
         from openai import AsyncOpenAI
         from .agents import MultiAgentOrchestrator, InputAnalyzerAgent, DataAnalyzerAgent
         from .agents import CodeGeneratorAgent, CodeValidatorAgent, OutputValidatorAgent
-        from .agents import AnalysisValidatorAgent
         from .e2b.executor import E2BExecutor as AgentE2BExecutor
         from .integrations.rag_client import RAGClient
 
@@ -167,7 +166,6 @@ class CachedExecutor(ExecutorStrategy):
         code_generator = CodeGeneratorAgent(openai_client, rag_client)  # Pass RAG client
         code_validator = CodeValidatorAgent()
         output_validator = OutputValidatorAgent(openai_client)
-        analysis_validator = AnalysisValidatorAgent(openai_client)
 
         # Initialize Multi-Agent Orchestrator
         self.orchestrator = MultiAgentOrchestrator(
@@ -176,7 +174,6 @@ class CachedExecutor(ExecutorStrategy):
             code_generator=code_generator,
             code_validator=code_validator,
             output_validator=output_validator,
-            analysis_validator=analysis_validator,
             e2b_executor=e2b_executor,
             max_retries=3
         )

@@ -15,7 +15,6 @@ def mock_agents():
         "code_generator": Mock(),
         "code_validator": Mock(),
         "output_validator": Mock(),
-        "analysis_validator": Mock(),
         "e2b_executor": Mock()
     }
 
@@ -29,7 +28,6 @@ def orchestrator(mock_agents):
         code_generator=mock_agents["code_generator"],
         code_validator=mock_agents["code_validator"],
         output_validator=mock_agents["output_validator"],
-        analysis_validator=mock_agents["analysis_validator"],
         e2b_executor=mock_agents["e2b_executor"],
         max_retries=3
     )
@@ -115,14 +113,6 @@ async def test_orchestrator_with_data_analysis(orchestrator, mock_agents):
         return_value={"type": "pdf", "pages": 1}
     )
 
-    # Mock AnalysisValidator
-    mock_agents["analysis_validator"].execute = AsyncMock(return_value=AgentResponse(
-        success=True,
-        data={"valid": True, "reason": "Insights válidos"},
-        execution_time_ms=30.0,
-        agent_name="AnalysisValidator"
-    ))
-
     # Mock rest of agents (simple success path)
     mock_agents["code_generator"].execute = AsyncMock(return_value=AgentResponse(
         success=True,
@@ -164,8 +154,6 @@ async def test_orchestrator_with_data_analysis(orchestrator, mock_agents):
     # Verificar que DataAnalyzer fue llamado
     assert result["_ai_metadata"]["data_analysis"]["insights"]["type"] == "pdf"
     mock_agents["data_analyzer"].execute.assert_called_once()
-    # Verificar que AnalysisValidator fue llamado
-    mock_agents["analysis_validator"].execute.assert_called_once()
 
 
 @pytest.mark.asyncio
