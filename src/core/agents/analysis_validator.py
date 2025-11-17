@@ -157,7 +157,7 @@ class AnalysisValidatorAgent(BaseAgent):
 Devuelve JSON:
 {
   "valid": true/false,
-  "reason": "Explicación detallada de por qué es válido o inválido",
+  "reason": "Explicación breve de por qué es válido o inválido",
   "suggestions": ["sugerencia 1", "sugerencia 2"]  // solo si invalid
 }
 
@@ -166,7 +166,6 @@ Devuelve JSON:
 2. **Type desconocido** → type = "unknown" (no pudo detectar qué tipo de datos es)
 3. **Metadata vacía** → Tiene type definido pero TODAS las demás keys están vacías/null/missing
 4. **Error de ejecución** → Contiene key "error" indicando que el código falló
-5. **Sin valor** → Los insights no aportan información útil para resolver la tarea
 
 🟢 Los insights son VÁLIDOS si:
 1. **Metadata estructurada** → Contiene información organizada (no solo un string)
@@ -175,19 +174,12 @@ Devuelve JSON:
 4. **Sin errores reales** → No hay crashes ni fallos de ejecución
 5. **Ayuda a la tarea** → La información es útil para el siguiente paso del workflow
 
-⚠️ CASOS ESPECIALES:
-- Si type="pdf" con has_text_layer=false → ES VÁLIDO (indica que necesita OCR)
-- Si type="image" con has_text=false → ES VÁLIDO (indica que no tiene texto visible)
-- Si type="email" con attachment_count=0 → ES VÁLIDO (indica que no hay attachments)
-- Metadata parcial es VÁLIDA si es útil (no necesita tener TODAS las keys posibles)
 
 **IMPORTANTE - LOS INSIGHTS SON DESCRIPTIVOS, NO RESOLUTIVOS:**
 - ⚠️ El DataAnalyzer solo ANALIZA la data, NO la procesa ni resuelve la tarea
 - ⚠️ Los insights son METADATA INFORMATIVA para que el CodeGenerator sepa qué estrategia usar
-- ⚠️ Detectar "no hay texto" o "necesita OCR" es un insight VÁLIDO (guía la estrategia)
 - Sé CRÍTICO pero evalúa si los insights DESCRIBEN la data, no si RESUELVEN la tarea
 - Compara: ¿Los insights informan sobre la ESTRUCTURA/CARACTERÍSTICAS de la data? Sí/No
-- Metadata vacía/genérica sin estructura → INVÁLIDO
 - Metadata estructurada aunque sea parcial → VÁLIDO
 - Distingue "código falló" (crash) vs "código funcionó pero detectó que no hay datos"
 
