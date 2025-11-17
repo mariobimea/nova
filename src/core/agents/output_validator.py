@@ -224,7 +224,16 @@ Devuelve JSON:
 3. **Tarea completada** → Todo lo que se pidió en la tarea está en el contexto
 4. **Sin errores reales** → No hay crashes ni fallos de ejecución
 
-⚠️ CASOS ESPECIALES:
+⚠️ CASOS ESPECIALES - DECISIONNODES:
+- **Si la tarea es "decide/evalúa/verifica si..."** → Es un DecisionNode
+- **DecisionNodes SOLO necesitan establecer una key de decisión** (ej: 'amount_decision', 'has_pdf_decision')
+- **El valor puede ser 'true'/'false', 'yes'/'no', etc.**
+- **Si se estableció la key de decisión con un valor válido → ES VÁLIDO** ✅
+- **NO importa cuál sea el valor** ('true' o 'false' ambos son válidos)
+- **Ejemplo válido**: amount_decision='false' cuando monto < 1000 ✅
+- **Ejemplo válido**: has_pdf_decision='true' cuando hay PDF ✅
+
+⚠️ CASOS ESPECIALES - OTROS:
 - Si hay context['error'] pero es INFORMATIVO (ej: "No unread emails found"),
   evalúa si eso es un resultado LEGÍTIMO según la tarea
 - Distingue "código falló" (crash/timeout) vs "código funcionó pero no había datos"
