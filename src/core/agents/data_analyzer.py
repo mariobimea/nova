@@ -152,14 +152,17 @@ class DataAnalyzerAgent(BaseAgent):
 
 NO resuelvas ninguna tarea, solo ENTIENDE qué es la data.
 
+**Contexto disponible (variable 'context'):**
+La variable `context` es un diccionario que YA EXISTE con EXACTAMENTE estas keys:
+{json.dumps(context_schema, indent=2, ensure_ascii=False)}
+
 **Reglas CRÍTICAS:**
 1. ⚠️ El dict `context` YA EXISTE - NO lo definas ni copies valores
-2. Accede a la data así: `pdf_bytes = base64.b64decode(context['pdf_data_b64'])`
-3. NO hagas `context = {{...}}` - el contexto ya está disponible
-
-**Contexto disponible (variable 'context'):**
-La variable `context` es un diccionario que YA EXISTE con estas keys:
-{json.dumps(context_schema, indent=2, ensure_ascii=False)}
+2. ⚠️ SOLO puedes acceder a las keys que ves ARRIBA en el contexto schema
+3. ⚠️ NO inventes ni asumas nombres de keys que no estén en la lista
+4. ⚠️ Si una key no aparece en el schema arriba, NO la uses en tu código
+5. Accede a la data así: `value = context['key_name']` donde 'key_name' es UNA de las keys listadas arriba
+6. NO hagas `context = {{...}}` - el contexto ya está disponible
 
 ⚠️ IMPORTANTE: Este es solo el ESQUEMA del contexto (valores resumidos).
 NO copies estos valores al código. Usa `context['key']` para acceder a los valores reales.
