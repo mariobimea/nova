@@ -594,14 +594,27 @@ class MultiAgentOrchestrator:
 
                         else:
                             # Ejecución exitosa
+                            # 🔥 DEBUG: Log what E2B returned before processing
+                            self.logger.info(f"🔍 DEBUG - E2B returned updated_context:")
+                            self.logger.info(f"   Keys in updated_context: {list(updated_context.keys())}")
+                            self.logger.info(f"   Full updated_context: {updated_context}")
+
                             # 🔥 NUEVO: Extraer stderr/stdout/exit_code antes de actualizar contexto
                             stderr = updated_context.pop("_stderr", "")
                             stdout = updated_context.pop("_stdout", "")
                             exit_code = updated_context.pop("_exit_code", 0)
 
+                            self.logger.info(f"🔍 DEBUG - After popping metadata:")
+                            self.logger.info(f"   Keys remaining in updated_context: {list(updated_context.keys())}")
+                            self.logger.info(f"   context_state.current BEFORE update: {list(context_state.current.keys())}")
+
                             # MERGE context updates with current context
                             # This preserves existing keys that weren't modified
                             context_state.current.update(updated_context)
+
+                            self.logger.info(f"🔍 DEBUG - After update:")
+                            self.logger.info(f"   context_state.current AFTER update: {list(context_state.current.keys())}")
+                            self.logger.info(f"   Full context_state.current: {context_state.current}")
 
                             # 🔥 NUEVO: SIEMPRE guardar stderr/stdout (incluso en éxito)
                             execution_state.execution_result = {
@@ -669,6 +682,13 @@ class MultiAgentOrchestrator:
 
                     # 4.4 OutputValidator (post-ejecución)
                     self.logger.info("✅ Validando resultado...")
+
+                    # 🔥 DEBUG: Log what we're passing to OutputValidator
+                    self.logger.info(f"🔍 DEBUG - Calling OutputValidator with:")
+                    self.logger.info(f"   context_before keys: {list(context_state.initial.keys())}")
+                    self.logger.info(f"   context_after keys: {list(context_state.current.keys())}")
+                    self.logger.info(f"   context_after full: {context_state.current}")
+
                     output_val = await self.output_validator.execute(
                         task=task,
                         context_before=context_state.initial,
