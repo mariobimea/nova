@@ -154,153 +154,84 @@ class OutputValidatorAgent(BaseAgent):
         generated_code: str = None,
         execution_result: Dict = None
     ) -> str:
-        """Construye el prompt para validación CON CONTEXTO COMPLETO"""
+        """Construye el prompt SIMPLIFICADO para validación"""
 
-        # Usar contexto compacto (no resumen agresivo)
-        before_compact = self._compact_context(context_before, max_str_length=2000)
-        after_compact = self._compact_context(context_after, max_str_length=2000)
+        # Detectar si es DecisionNode basándose en la tarea
+        is_decision = any(keyword in task.lower() for keyword in ["decide", "evalúa", "verifica si", "check if"])
 
-        prompt = f"""Tu trabajo: Validar si la tarea se completó correctamente después de ejecutar el código.
+        # Prompt ultra-simplificado
+        prompt = f"""Valida si esta ejecución fue exitosa.
 
-**Tarea solicitada:** {task}
+TAREA: {task}
 
-**Contexto ANTES de ejecutar:**
-{json.dumps(before_compact, indent=2, ensure_ascii=False)}
+CAMBIOS DETECTADOS: {changes if changes else "Ninguno"}
 
-**Contexto DESPUÉS de ejecutar:**
-{json.dumps(after_compact, indent=2, ensure_ascii=False)}
+INFORMACIÓN CLAVE:"""
 
-**Cambios detectados:** {changes if changes else "Ninguno"}
-"""
+        if is_decision:
+            # Para DecisionNodes: mostrar solo lo relevante
+            # Buscar la key de decisión (debería estar en changes)
+            decision_key = changes[0] if changes else "unknown"
+            decision_value = context_after.get(decision_key, "N/A")
 
-        # 🔥 NUEVO: Agregar información de ejecución (stderr, stdout, status)
-        if execution_result:
-            status = execution_result.get("status", "unknown")
+            # Extraer datos relevantes para la decisión (ej: total_amount)
+            relevant_data = {}
+            if "amount" in task.lower():
+                relevant_data["total_amount"] = context_after.get("total_amount", "N/A")
+            if "pdf" in task.lower() or "attachment" in task.lower():
+                relevant_data["attachments"] = context_after.get("attachments", "N/A")
+
             prompt += f"""
-**Resultado de la ejecución:**
-- Status: {status}
+- Tipo: DecisionNode (solo agrega una key de decisión)
+- Key agregada: '{decision_key}'
+- Valor de decisión: '{decision_value}'
+- Datos relevantes: {json.dumps(relevant_data, ensure_ascii=False)}
+
+REGLAS PARA DECISIONNODE:
+1. SI la key de decisión fue agregada (está en cambios) → Revisar lógica
+2. SI la decisión es lógicamente correcta según los datos → VÁLIDO
+3. SI la decisión es lógicamente incorrecta → INVÁLIDO
+
+EJEMPLOS:
+- Task="decide if amount > 1000", total_amount="279,00", decision="false" → VÁLIDO (279 < 1000)
+- Task="decide if amount > 1000", total_amount="279,00", decision="true" → INVÁLIDO (279 < 1000, debería ser false)
+- Task="decide if amount > 1000", total_amount="1500,00", decision="true" → VÁLIDO (1500 > 1000)
+"""
+        else:
+            # Para ActionNodes: mostrar contexto completo compactado
+            after_compact = self._compact_context(context_after, max_str_length=1000)
+
+            prompt += f"""
+- Tipo: ActionNode (debe agregar/modificar datos)
+- Contexto después: {json.dumps(after_compact, indent=2, ensure_ascii=False)}
+
+REGLAS PARA ACTIONNODE:
+1. SI se agregaron datos relevantes a la tarea → VÁLIDO
+2. SI no hay cambios o valores vacíos → INVÁLIDO
+3. SI hay error en stderr → INVÁLIDO
 """
 
-            # Si hay stderr (error de Python), incluirlo
+        # Agregar info de ejecución si hay
+        if execution_result:
             stderr = execution_result.get("stderr", "")
             if stderr:
                 prompt += f"""
-- **Error (stderr):**
-```
-{stderr[:1000]}  # Truncar a 1000 chars
-```
-"""
-
-            # Si hay stdout (puede tener información útil)
-            stdout = execution_result.get("stdout", "")
-            if stdout:
-                prompt += f"""
-- **Output (stdout):**
-```
-{stdout[:500]}  # Truncar a 500 chars
-```
-"""
-
-        # Agregar código generado si está disponible (para mejor contexto)
-        if generated_code:
-            prompt += f"""
-**Código que se ejecutó:**
-```python
-{generated_code}
-```
+ERROR EN EJECUCIÓN:
+{stderr[:500]}
 """
 
         prompt += """
-Devuelve JSON:
+
+RESPONDE EN JSON:
 {
   "valid": true/false,
-  "reason": "Explicación detallada de por qué es válido o inválido",
-  "python_error": "Si hay error en stderr, extrae SOLO la línea del error específico (ej: 'AttributeError: X object has no attribute Y'). Si no hay error, omite este campo."
+  "reason": "Breve explicación (1-2 frases)"
 }
 
-🔴 Es INVÁLIDO si:
-1. **No hay cambios** → El contexto no se modificó (nada agregado/actualizado)
-2. **Valores vacíos** → Se agregaron keys pero están vacías ("", null, [], {}, 0 cuando debería haber un valor)
-3. **Errores REALES** → Hay keys "error"/"exception" con fallos REALES (crashes, timeouts)
-4. **Tarea incompleta** → La tarea pedía X pero solo se hizo Y (ej: pidió "total" pero solo agregó "currency")
-5. **Valores sin sentido** → Los valores agregados no tienen relación con la tarea
-6. **Código falló** → El código crasheó o no hizo nada útil
-7. **Error en stderr** → Hay un error de Python en stderr (AttributeError, TypeError, ImportError, etc.)
-
-🟢 Es VÁLIDO si:
-1. **Cambios relevantes** → Se agregaron o modificaron datos importantes
-2. **Valores correctos** → Los valores agregados tienen sentido para la tarea
-3. **Tarea completada** → Todo lo que se pidió en la tarea está en el contexto
-4. **Sin errores reales** → No hay crashes ni fallos de ejecución
-
-⚠️ CASOS ESPECIALES - DECISIONNODES:
-- **Si la tarea es "decide/evalúa/verifica si..."** → Es un DecisionNode
-- **DecisionNodes tienen un comportamiento especial:**
-  1. ✅ SOLO deben establecer UNA key de decisión (ej: 'amount_decision', 'has_pdf_decision')
-  2. ✅ NO modifican otros datos del contexto (eso es normal y esperado)
-  3. ✅ El valor de la decisión debe tener SENTIDO LÓGICO según los datos del contexto
-
-- **CÓMO VALIDAR UN DECISIONNODE:**
-  1. **Verifica que existe la key de decisión** en `context_after` (ej: 'amount_decision')
-  2. **Extrae el valor de la decisión** (debe ser 'true', 'false', o similar)
-  3. **Valida la lógica** comparando con los datos relevantes en `context_after`
-  4. **Si la lógica es correcta → VÁLIDO** (aunque no haya otros cambios en el contexto)
-
-- **Ejemplos de validación:**
-  - ✅ VÁLIDO: Task="decide if amount > 1000", context has "total_amount": "1500,00" (€1500), result="amount_decision": "true" ✅
-    → Razón: La decisión es 'true', y €1500 > 1000, por lo tanto la lógica es correcta ✅
-
-  - ❌ INVÁLIDO: Task="decide if amount > 1000", context has "total_amount": "279,00" (€279), result="amount_decision": "true" ❌
-    → Razón: La decisión es 'true', pero €279 < 1000, por lo tanto la lógica es INCORRECTA ❌
-
-  - ✅ VÁLIDO: Task="decide if amount > 1000", context has "total_amount": "279,00" (€279), result="amount_decision": "false" ✅
-    → Razón: La decisión es 'false', y €279 < 1000, por lo tanto la lógica es correcta ✅
-    → IMPORTANTE: El hecho de que SOLO se agregó la key 'amount_decision' y no se modificaron otros datos es NORMAL y ESPERADO en un DecisionNode
-
-  - ✅ VÁLIDO: Task="decide if has PDF", context has "attachments": [{"type": "pdf"}], result="has_pdf_decision": "true" ✅
-    → Razón: La decisión es 'true' y hay un PDF en attachments, lógica correcta ✅
-
-  - ❌ INVÁLIDO: Task="decide if has PDF", context has "attachments": [], result="has_pdf_decision": "true" ❌
-    → Razón: La decisión es 'true' pero attachments está vacío, lógica INCORRECTA ❌
-
-- **IMPORTANTE - Formato de números europeo:**
-  - En España: "279,00" significa 279 euros (coma = separador decimal)
-  - "1.234,56" significa 1234.56 euros (punto = separador de miles)
-  - Al validar comparaciones numéricas, interpreta correctamente el formato europeo
-  - Ejemplo: "279,00" < 1000 → decisión debe ser "false"
-  - Ejemplo: "1.500,00" > 1000 → decisión debe ser "true"
-
-- **RECORDATORIO CRÍTICO PARA DECISIONNODES:**
-  - ✅ DecisionNode SOLO agrega la key de decisión → ESTO ES CORRECTO
-  - ✅ Si la lógica de la decisión es correcta Y la key fue agregada → VÁLIDO
-  - ❌ NO invalides un DecisionNode solo porque "no modificó otros datos"
-  - ❌ NO digas "el contexto no se actualizó adecuadamente" si la decisión existe y es lógica
-
-⚠️ CASOS ESPECIALES - OTROS:
-- Si hay context['error'] pero es INFORMATIVO (ej: "No unread emails found"),
-  evalúa si eso es un resultado LEGÍTIMO según la tarea
-- Distingue "código falló" (crash/timeout) vs "código funcionó pero no había datos"
-- Un mensaje descriptivo puede ser válido si explica por qué no hay datos disponibles
-- Si la tarea era "leer email" y no había emails, el error informativo es VÁLIDO
-
-**IMPORTANTE - EVALÚA SOLO LA EJECUCIÓN ACTUAL:**
-- ⚠️ NO especules sobre "qué pasaría si..." o "el código podría fallar si..."
-- ⚠️ SOLO evalúa: ¿Esta ejecución específica funcionó correctamente?
-- Sé CRÍTICO pero basándote en RESULTADOS REALES, no potenciales bugs
-- Compara la TAREA con el RESULTADO ACTUAL (no con casos hipotéticos)
-- Si el código corrió pero no hizo nada útil EN ESTA EJECUCIÓN → INVÁLIDO
-- Si falta información que se pidió EN ESTA EJECUCIÓN → INVÁLIDO
-- Si hay un error REAL (crash/exception) EN ESTA EJECUCIÓN → INVÁLIDO
-- Si hay un error INFORMATIVO pero completó la tarea EN ESTA EJECUCIÓN → VÁLIDO
-- Si la tarea se completó y hay cambios relevantes EN EL CONTEXTO → VÁLIDO
-
-🎯 Pregunta clave: ¿El código hizo lo que se pidió EN ESTA EJECUCIÓN específica? Sí/No
-
-**Tu reason debe explicar**:
-- ¿Qué se esperaba según la tarea?
-- ¿Qué se obtuvo realmente?
-- ¿Por qué es válido/inválido?
-- Si es inválido: ¿Qué está fallando en el código? (insight para retry)
+IMPORTANTE:
+- Para DecisionNode: SOLO valida si la decisión es lógicamente correcta
+- NO digas "contexto no se actualizó adecuadamente" si la key de decisión existe
+- Formato europeo: "279,00" = 279 euros, "1.500,00" = 1500 euros
 """
         return prompt
 
