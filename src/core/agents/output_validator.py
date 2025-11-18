@@ -54,8 +54,17 @@ class OutputValidatorAgent(BaseAgent):
         try:
             start_time = time.time()
 
+            # 🔥 DEBUG: Log what OutputValidator received
+            self.logger.info(f"🔍 DEBUG - OutputValidator received:")
+            self.logger.info(f"   Task: {task[:100]}...")
+            self.logger.info(f"   context_before keys: {list(context_before.keys())}")
+            self.logger.info(f"   context_after keys: {list(context_after.keys())}")
+            self.logger.info(f"   context_after full: {context_after}")
+
             # Detectar cambios
             changes = self._detect_changes(context_before, context_after)
+
+            self.logger.info(f"🔍 DEBUG - Changes detected: {changes}")
 
             # Construir prompt
             prompt = self._build_prompt(task, context_before, context_after, changes, generated_code, execution_result)
