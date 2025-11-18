@@ -226,21 +226,33 @@ Devuelve JSON:
 
 ⚠️ CASOS ESPECIALES - DECISIONNODES:
 - **Si la tarea es "decide/evalúa/verifica si..."** → Es un DecisionNode
-- **DecisionNodes deben:**
-  1. ✅ Establecer una key de decisión (ej: 'amount_decision', 'has_pdf_decision')
-  2. ✅ El valor debe tener SENTIDO LÓGICO según los datos del contexto
+- **DecisionNodes tienen un comportamiento especial:**
+  1. ✅ SOLO deben establecer UNA key de decisión (ej: 'amount_decision', 'has_pdf_decision')
+  2. ✅ NO modifican otros datos del contexto (eso es normal y esperado)
+  3. ✅ El valor de la decisión debe tener SENTIDO LÓGICO según los datos del contexto
 
-- **VALIDA LA LÓGICA DE LA DECISIÓN:**
-  - Compara `context_before` con `context_after`
-  - Si la tarea dice "decide if X > Y", verifica que la decisión sea correcta
-  - Si la tarea dice "decide if has PDF", verifica que la decisión refleje la realidad
+- **CÓMO VALIDAR UN DECISIONNODE:**
+  1. **Verifica que existe la key de decisión** en `context_after` (ej: 'amount_decision')
+  2. **Extrae el valor de la decisión** (debe ser 'true', 'false', o similar)
+  3. **Valida la lógica** comparando con los datos relevantes en `context_after`
+  4. **Si la lógica es correcta → VÁLIDO** (aunque no haya otros cambios en el contexto)
 
-- **Ejemplos de validación lógica:**
-  - ✅ VÁLIDO: Task="decide if amount > 1000", context has "total_amount": "1500,00" (€1500), result="true" ✅
-  - ❌ INVÁLIDO: Task="decide if amount > 1000", context has "total_amount": "279,00" (€279), result="true" ❌ (debería ser "false", 279 < 1000)
-  - ✅ VÁLIDO: Task="decide if amount > 1000", context has "total_amount": "279,00" (€279), result="false" ✅
-  - ✅ VÁLIDO: Task="decide if has PDF", context has "attachments": [...], result="true" ✅
-  - ❌ INVÁLIDO: Task="decide if has PDF", context has "attachments": [], result="true" ❌ (debería ser "false", no hay attachments)
+- **Ejemplos de validación:**
+  - ✅ VÁLIDO: Task="decide if amount > 1000", context has "total_amount": "1500,00" (€1500), result="amount_decision": "true" ✅
+    → Razón: La decisión es 'true', y €1500 > 1000, por lo tanto la lógica es correcta ✅
+
+  - ❌ INVÁLIDO: Task="decide if amount > 1000", context has "total_amount": "279,00" (€279), result="amount_decision": "true" ❌
+    → Razón: La decisión es 'true', pero €279 < 1000, por lo tanto la lógica es INCORRECTA ❌
+
+  - ✅ VÁLIDO: Task="decide if amount > 1000", context has "total_amount": "279,00" (€279), result="amount_decision": "false" ✅
+    → Razón: La decisión es 'false', y €279 < 1000, por lo tanto la lógica es correcta ✅
+    → IMPORTANTE: El hecho de que SOLO se agregó la key 'amount_decision' y no se modificaron otros datos es NORMAL y ESPERADO en un DecisionNode
+
+  - ✅ VÁLIDO: Task="decide if has PDF", context has "attachments": [{"type": "pdf"}], result="has_pdf_decision": "true" ✅
+    → Razón: La decisión es 'true' y hay un PDF en attachments, lógica correcta ✅
+
+  - ❌ INVÁLIDO: Task="decide if has PDF", context has "attachments": [], result="has_pdf_decision": "true" ❌
+    → Razón: La decisión es 'true' pero attachments está vacío, lógica INCORRECTA ❌
 
 - **IMPORTANTE - Formato de números europeo:**
   - En España: "279,00" significa 279 euros (coma = separador decimal)
@@ -249,7 +261,11 @@ Devuelve JSON:
   - Ejemplo: "279,00" < 1000 → decisión debe ser "false"
   - Ejemplo: "1.500,00" > 1000 → decisión debe ser "true"
 
-- **IMPORTANTE:** NO solo valides que existe la key, **valida que el valor tenga sentido**
+- **RECORDATORIO CRÍTICO PARA DECISIONNODES:**
+  - ✅ DecisionNode SOLO agrega la key de decisión → ESTO ES CORRECTO
+  - ✅ Si la lógica de la decisión es correcta Y la key fue agregada → VÁLIDO
+  - ❌ NO invalides un DecisionNode solo porque "no modificó otros datos"
+  - ❌ NO digas "el contexto no se actualizó adecuadamente" si la decisión existe y es lógica
 
 ⚠️ CASOS ESPECIALES - OTROS:
 - Si hay context['error'] pero es INFORMATIVO (ej: "No unread emails found"),
