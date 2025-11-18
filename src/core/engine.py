@@ -320,25 +320,17 @@ class GraphEngine:
                 else:
                     logger.info(f"⚠️  No AI metadata found in updated_context (executor: {node.executor})")
 
-                # Check if result has E2B format wrapper (context_updates)
-                # This happens when AI-generated code prints structured JSON
-                if "context_updates" in updated_context:
-                    # Extract the actual updates from the wrapper
-                    actual_updates = updated_context.get("context_updates", {})
+                # E2BExecutor already extracted context_updates from the JSON output
+                # No need to check for wrapper again - just update directly
+                logger.info(f"🔍 DEBUG before context.update() for node {node.id}:")
+                logger.info(f"   updated_context keys: {list(updated_context.keys())}")
+                logger.info(f"   updated_context content: {updated_context}")
+                logger.info(f"   context BEFORE update: {list(context.get_all().keys())}")
 
-                    # DEBUG: Log what we're about to update
-                    logger.info(f"🔍 DEBUG before context.update() for node {node.id}:")
-                    logger.info(f"   actual_updates keys: {list(actual_updates.keys())}")
-                    logger.info(f"   actual_updates content: {actual_updates}")
-                    logger.info(f"   context BEFORE update: {list(context.get_all().keys())}")
+                context.update(updated_context)
 
-                    context.update(actual_updates)
-
-                    logger.info(f"   context AFTER update: {list(context.get_all().keys())}")
-                    logger.info(f"   Did context gain new keys? {set(context.get_all().keys()) - set(input_context.keys())}")
-                else:
-                    # Traditional format - update directly
-                    context.update(updated_context)
+                logger.info(f"   context AFTER update: {list(context.get_all().keys())}")
+                logger.info(f"   Did context gain new keys? {set(context.get_all().keys()) - set(input_context.keys())}")
 
                 # Store actual executed code (not prompt)
                 # If AI generated code, use that. Otherwise use the prompt/code as-is
@@ -384,15 +376,9 @@ class GraphEngine:
                 if ai_metadata:
                     metadata["ai_metadata"] = ai_metadata
 
-                # Check if result has E2B format wrapper (context_updates)
-                # This happens when AI-generated code prints structured JSON
-                if "context_updates" in updated_context:
-                    # Extract the actual updates from the wrapper
-                    actual_updates = updated_context.get("context_updates", {})
-                    context.update(actual_updates)
-                else:
-                    # Traditional format - update directly
-                    context.update(updated_context)
+                # E2BExecutor already extracted context_updates from the JSON output
+                # No need to check for wrapper again - just update directly
+                context.update(updated_context)
 
                 # Store actual executed code (not prompt)
                 # If AI generated code, use that. Otherwise use the prompt/code as-is
