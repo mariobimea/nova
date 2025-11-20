@@ -66,9 +66,23 @@ class MultiAgentOrchestrator:
         Returns:
             Contexto resumido (strings largos truncados)
         """
+        # Keys que NUNCA deben truncarse (metadata estructural crítica)
+        PRESERVE_KEYS = {
+            "database_schemas",  # Schemas de DB (crítico para análisis)
+            "database_schema",   # Variante singular
+            "db_schemas",        # Otra variante
+            "schema",            # Schema genérico
+            "metadata"           # Metadata estructural
+        }
+
         summary = {}
 
         for key, value in context.items():
+            # Si es una key crítica, preservarla completa
+            if key in PRESERVE_KEYS:
+                summary[key] = value
+                continue
+
             if isinstance(value, str):
                 if len(value) > 200:
                     # Truncar strings largos (PDFs en base64, emails, etc.)
