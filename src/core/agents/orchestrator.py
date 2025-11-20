@@ -27,6 +27,7 @@ from .code_validator import CodeValidatorAgent
 from .output_validator import OutputValidatorAgent
 from .analysis_validator import AnalysisValidatorAgent
 from ..e2b.executor import E2BExecutor
+from ..context import ContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +193,9 @@ class MultiAgentOrchestrator:
             current=context.copy()
         )
 
+        # 🔥 NUEVO: Crear ContextManager para gestionar Context Summary
+        context_manager = ContextManager(context)
+
         # 🔥 NUEVO: Lista para registrar todos los steps
         steps_to_persist: List[Dict] = []
 
@@ -200,7 +204,11 @@ class MultiAgentOrchestrator:
         try:
             # 2. InputAnalyzer (UNA SOLA VEZ)
             self.logger.info("📊 Ejecutando InputAnalyzer...")
-            input_analysis = await self.input_analyzer.execute(task, context_state)
+            input_analysis = await self.input_analyzer.execute(
+                task=task,
+                context_state=context_state,
+                context_summary=context_manager.get_summary()  # ⬅️ NUEVO: Pasar summary
+            )
 
             # 🔥 Registrar step 1: InputAnalyzer
             steps_to_persist.append(
@@ -236,6 +244,7 @@ class MultiAgentOrchestrator:
                         self.logger.info("💻 Generando código de análisis...")
                         data_analysis = await self.data_analyzer.execute(
                             context_state=context_state,
+                            context_summary=context_manager.get_summary(),  # ⬅️ NUEVO: Pasar summary
                             error_history=analysis_errors
                         )
 
@@ -424,6 +433,23 @@ class MultiAgentOrchestrator:
                             "suggestions": insights_val.data.get("suggestions", [])
                         }
 
+                        # 🔥 NUEVO: Registrar análisis en Context Summary
+                        # Esto permite análisis incremental en el siguiente nodo
+                        if not data_analysis.data.get("skipped", False):
+                            analyzed_keys = data_analysis.data.get("analyzed_keys", [])
+                            if analyzed_keys:
+                                # Generar schema simple de los insights
+                                schema = {
+                                    key: {"type": "analyzed", "insights": insights.get(key, {})}
+                                    for key in analyzed_keys
+                                }
+                                context_manager.add_analysis(
+                                    node_id=node_id or "data_analysis",
+                                    analyzed_keys=analyzed_keys,
+                                    schema=schema
+                                )
+                                self.logger.info(f"✅ Registered analysis for keys: {analyzed_keys}")
+
                         execution_state.data_analysis = {
                             **data_analysis.data,
                             "insights": insights
@@ -460,6 +486,7 @@ class MultiAgentOrchestrator:
                     code_gen = await self.code_generator.execute(
                         task=task,
                         context_state=context_state,
+                        context_summary=context_manager.get_summary(),  # 🔥 NUEVO: Pasar Context Summary
                         error_history=execution_state.errors,
                         node_type=node_type,  # Pass node type to code generator
                         node_id=node_id  # Pass node ID to code generator

@@ -3,21 +3,24 @@ InputAnalyzerAgent - Decide estrategia de ejecución.
 
 Responsabilidad:
     Analizar si necesitamos entender la data antes de resolver la tarea.
+    Ahora recibe Context Summary para tomar mejores decisiones.
 
 Características:
     - Modelo: gpt-4o-mini (decisión simple, rápido)
     - Ejecuciones: UNA SOLA VEZ (no se repite en retries)
     - Tool calling: NO
     - Costo: ~$0.0005 por ejecución
+    - Context-aware: Ve qué ya se analizó para evitar redundancia
 """
 
-from typing import Dict
+from typing import Dict, Optional
 import json
 import time
 from openai import AsyncOpenAI
 
 from .base import BaseAgent, AgentResponse
 from .state import ContextState
+from ..context_summary import ContextSummary
 
 
 class InputAnalyzerAgent(BaseAgent):
@@ -28,13 +31,19 @@ class InputAnalyzerAgent(BaseAgent):
         self.client = openai_client
         self.model = "gpt-4o-mini"
 
-    async def execute(self, task: str, context_state: ContextState) -> AgentResponse:
+    async def execute(
+        self,
+        task: str,
+        context_state: ContextState,
+        context_summary: Optional[ContextSummary] = None
+    ) -> AgentResponse:
         """
         Analiza la tarea y contexto para decidir estrategia.
 
         Args:
             task: Tarea a resolver (en lenguaje natural)
             context_state: Estado del contexto
+            context_summary: Resumen con historial de análisis (opcional)
 
         Returns:
             AgentResponse con:
@@ -44,10 +53,22 @@ class InputAnalyzerAgent(BaseAgent):
         """
         try:
             # Obtener contexto resumido (keys + valores truncados)
-            context_summary = self._summarize_context(context_state.current)
+            context_summary_dict = self._summarize_context(context_state.current)
 
-            # Construir prompt
-            prompt = self._build_prompt(task, context_summary)
+            # Obtener historial de análisis (si existe)
+            analysis_history = []
+            if context_summary:
+                analysis_history = [
+                    {
+                        "node_id": entry.node_id,
+                        "analyzed_keys": entry.analyzed_keys,
+                        "timestamp": entry.timestamp
+                    }
+                    for entry in context_summary.analysis_history
+                ]
+
+            # Construir prompt (ahora incluye historial)
+            prompt = self._build_prompt(task, context_summary_dict, analysis_history)
 
             # Llamar a OpenAI
             start_time = time.time()
@@ -65,7 +86,7 @@ class InputAnalyzerAgent(BaseAgent):
                 ],
                 temperature=0.5,
                 response_format={"type": "json_object"},
-                timeout=30.0  # 30 segundos timeout
+                timeout=30.0
             )
             execution_time_ms = (time.time() - start_time) * 1000
 
@@ -144,8 +165,21 @@ class InputAnalyzerAgent(BaseAgent):
 
         return summary
 
-    def _build_prompt(self, task: str, context_summary: dict) -> str:
-        """Construye el prompt para el modelo"""
+    def _build_prompt(self, task: str, context_summary: dict, analysis_history: list) -> str:
+        """Construye el prompt para el modelo (ahora con historial)"""
+
+        # Serializar historial
+        history_section = ""
+        if analysis_history:
+            history_json = json.dumps(analysis_history, indent=2, ensure_ascii=False)
+            history_section = f"""
+📚 **HISTORIAL DE ANÁLISIS PREVIOS:**
+{history_json}
+
+Las keys listadas arriba YA FUERON ANALIZADAS en nodos anteriores.
+NO necesitas volver a analizarlas. Solo enfócate en keys NUEVAS que no aparecen en el historial.
+"""
+
         return f"""Tu tarea: Decidir si necesitamos analizar la estructura del CONTEXTO ACTUAL antes de resolver la tarea.
 
 ⚠️ IMPORTANTE: Analiza el CONTEXTO ACTUAL, NO lo que la tarea va a generar.
@@ -153,7 +187,9 @@ class InputAnalyzerAgent(BaseAgent):
 Tarea a resolver: {task}
 
 Contexto disponible AHORA (keys + valores resumidos):
-{json.dumps(context_summary, indent=2)}
+{json.dumps(context_summary, indent=2, ensure_ascii=False)}
+
+{history_section}
 
 Devuelve JSON con esta estructura exacta:
 {{
@@ -162,29 +198,32 @@ Devuelve JSON con esta estructura exacta:
   "reasoning": "Por qué decidiste esto"
 }}
 
-✅ Necesitas análisis (needs_analysis=true) SOLO si el CONTEXTO ACTUAL contiene:
+✅ Necesitas análisis (needs_analysis=true) SOLO si el CONTEXTO ACTUAL contiene keys NUEVAS (no en historial) con:
 - Data binaria YA PRESENTE (PDFs, imágenes, archivos en base64)
-  Ejemplo: {{"pdf_data": "<string: 500000 chars>"}} → needs_analysis=true
+  Ejemplo: {{"pdf_data": "<string: 500000 chars>"}} → needs_analysis=true (SI es nuevo)
 - Data muy grande YA PRESENTE (strings >10000 caracteres)
-  Ejemplo: {{"email_raw": "<string: 50000 chars>"}} → needs_analysis=true
+  Ejemplo: {{"email_raw": "<string: 50000 chars>"}} → needs_analysis=true (SI es nuevo)
 - Estructuras complejas YA PRESENTES (dictionaries, arrays con contenido anidado)
-  Ejemplo: {{"attachments": "<list: 2 items>"}} → needs_analysis=true
-  Ejemplo: {{"metadata": "<dict: 5 items>"}} → needs_analysis=true
+  Ejemplo: {{"attachments": "<list: 2 items>"}} → needs_analysis=true (SI es nuevo)
+  Ejemplo: {{"metadata": "<dict: 5 items>"}} → needs_analysis=true (SI es nuevo)
 
   ⚠️ IMPORTANTE: Si ves "<dict: X items>" o "<list: X items>" → ES UNA ESTRUCTURA COMPLEJA
   → Esto significa que hay datos anidados que necesitan ser analizados
-  → needs_analysis=true
+  → needs_analysis=true (SOLO si no está en el historial)
 
-  Es decir, si no se ve claramente la data, se requiere de análisis
+  Es decir, si no se ve claramente la data Y no está en el historial, se requiere de análisis
 
-❌ NO necesitas análisis (needs_analysis=false) si el CONTEXTO ACTUAL solo tiene:
-- Valores simples (strings cortos, números, booleans, null)
+❌ NO necesitas análisis (needs_analysis=false) si:
+- Todas las keys complejas YA fueron analizadas (aparecen en historial)
+- El CONTEXTO ACTUAL solo tiene valores simples NUEVOS (strings cortos, números, booleans, null)
   Ejemplo: {{"email_user": "user@example.com", "port": 993}} → needs_analysis=false
 - Credenciales o configuración (API keys, hosts, passwords)
   Ejemplo: {{"db_host": "localhost", "api_key": "xyz"}} → needs_analysis=false
 
 
 🔴 ERRORES COMUNES A EVITAR:
+- ❌ NO digas needs_analysis=true para keys que YA están en el historial
+  → Si una key ya fue analizada, NO la re-analices
 - ❌ NO digas needs_analysis=true porque "la tarea va a generar data compleja"
   → La tarea todavía NO se ejecutó, esa data NO existe aún
 - ❌ NO digas needs_analysis=true porque "hay múltiples fuentes de datos"

@@ -10,6 +10,7 @@ See: /documentacion/INVESTIGACION-CONTEXT-MANAGEMENT.md
 
 import copy
 from typing import Any, Dict, Optional
+from .context_summary import ContextSummary, AnalysisEntry
 
 
 class ContextManager:
@@ -47,6 +48,7 @@ class ContextManager:
             >>> context = ContextManager({"user_id": 123, "pdf_path": "/tmp/invoice.pdf"})
         """
         self._context: Dict[str, Any] = initial_context.copy() if initial_context else {}
+        self._summary: ContextSummary = ContextSummary()
 
     def get(self, key: str, default: Any = None) -> Any:
         """
@@ -222,3 +224,79 @@ class ContextManager:
     def __str__(self) -> str:
         """Human-readable string representation."""
         return f"ContextManager({self._context})"
+
+    # ==========================================
+    # Context Summary Methods (New)
+    # ==========================================
+
+    def get_summary(self) -> ContextSummary:
+        """
+        Get the context summary (for LLM consumption).
+
+        Returns:
+            ContextSummary with schema and metadata
+
+        Example:
+            >>> context = ContextManager({"amount": 1200})
+            >>> summary = context.get_summary()
+            >>> summary.schema
+            {"amount": {"type": "number", "description": "..."}}
+        """
+        return self._summary
+
+    def add_analysis(self, node_id: str, analyzed_keys: list, schema: dict) -> None:
+        """
+        Add a new analysis entry to the context summary.
+
+        Called after InputAnalyzer processes a node.
+
+        Args:
+            node_id: ID of the node where analysis happened
+            analyzed_keys: Keys that were analyzed
+            schema: Schema generated for those keys
+
+        Example:
+            >>> context.add_analysis(
+            ...     node_id="extract_text",
+            ...     analyzed_keys=["document_text"],
+            ...     schema={"document_text": {"type": "string", ...}}
+            ... )
+        """
+        entry = AnalysisEntry(
+            node_id=node_id,
+            analyzed_keys=analyzed_keys,
+            schema_generated=schema
+        )
+        self._summary.add_analysis(entry)
+
+    def get_clean_context(self) -> Dict[str, Any]:
+        """
+        Get context without metadata (for E2B execution).
+
+        Filters out all keys starting with '_' (metadata).
+
+        Returns:
+            Context with only real data (no metadata)
+
+        Example:
+            >>> context = ContextManager({"amount": 1200, "_meta": "..."})
+            >>> context.get_clean_context()
+            {"amount": 1200}  # _meta excluded
+        """
+        return {k: v for k, v in self._context.items() if not k.startswith("_")}
+
+    def get_new_keys(self) -> set:
+        """
+        Get keys in current context that haven't been analyzed yet.
+
+        Returns:
+            Set of keys that are new (not in analysis history)
+
+        Example:
+            >>> context = ContextManager({"a": 1, "b": 2})
+            >>> context.add_analysis("node1", ["a"], {...})
+            >>> context.get_new_keys()
+            {"b"}  # Only b is new
+        """
+        current_keys = set(self._context.keys())
+        return self._summary.get_new_keys(current_keys)

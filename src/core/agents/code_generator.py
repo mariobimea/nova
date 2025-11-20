@@ -18,6 +18,7 @@ from openai import AsyncOpenAI
 
 from .base import BaseAgent, AgentResponse
 from .state import ContextState
+from ..context_summary import ContextSummary
 from ..integrations.rag_client import RAGClient
 
 
@@ -82,6 +83,7 @@ class CodeGeneratorAgent(BaseAgent):
         self,
         task: str,
         context_state: ContextState,
+        context_summary: Optional[ContextSummary] = None,
         error_history: List[Dict] = None,
         node_type: Optional[str] = None,
         node_id: Optional[str] = None
@@ -92,6 +94,7 @@ class CodeGeneratorAgent(BaseAgent):
         Args:
             task: Tarea a resolver
             context_state: Estado del contexto
+            context_summary: Resumen del contexto con schema e historial (opcional)
             error_history: Errores de intentos previos (para retry)
             node_type: Tipo de nodo ("action", "decision", etc.) - opcional
             node_id: ID del nodo (usado para DecisionNodes) - opcional
@@ -113,7 +116,8 @@ class CodeGeneratorAgent(BaseAgent):
                 error_history or [],
                 node_type=node_type,
                 node_id=node_id,  # Pass node_id for DecisionNode key generation
-                analysis_validation=context_state.analysis_validation  # 🔥 NUEVO: Pasar validation reasoning
+                analysis_validation=context_state.analysis_validation,  # 🔥 Pasar validation reasoning
+                context_summary=context_summary  # 🔥 NUEVO: Pasar Context Summary
             )
 
             # Llamar a OpenAI con tool calling
@@ -284,7 +288,8 @@ class CodeGeneratorAgent(BaseAgent):
         error_history: List[Dict],
         node_type: Optional[str] = None,
         node_id: Optional[str] = None,
-        analysis_validation: Optional[Dict] = None
+        analysis_validation: Optional[Dict] = None,
+        context_summary: Optional[ContextSummary] = None
     ) -> str:
         """Construye el prompt para generación de código"""
 
@@ -307,6 +312,29 @@ La variable `context` es un diccionario que YA EXISTE con estas keys:
 
 ⚠️ IMPORTANTE: Este es solo el ESQUEMA del contexto (valores resumidos).
 NO copies estos valores al código. Usa `context['key']` para acceder a los valores reales.
+"""
+
+        # 🔥 NUEVO: Agregar schema completo del Context Summary (si existe)
+        if context_summary and context_summary.schema:
+            schema_json = json.dumps(context_summary.schema, indent=2, ensure_ascii=False)
+            prompt += """
+**📚 Schema completo del contexto (historial de análisis):**
+El siguiente schema muestra todas las keys que han sido analizadas en nodos anteriores:
+""" + schema_json + """
+
+Este schema te ayuda a entender:
+- Qué keys ya fueron analizadas y cómo
+- La estructura completa de la data disponible
+- Relaciones entre diferentes keys del contexto
+
+**Historial de análisis:**
+"""
+            # Agregar historial de análisis
+            for entry in context_summary.analysis_history:
+                prompt += f"- Nodo '{entry.node_id}': analizó {', '.join(entry.analyzed_keys)}\n"
+
+            prompt += """
+Usa esta información para generar código que aproveche TODA la data disponible, no solo la que se acaba de analizar.
 """
 
         # Agregar insights si existen
