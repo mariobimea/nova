@@ -315,8 +315,8 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
 """
 
         # 🔥 NUEVO: Agregar schema completo del Context Summary (si existe)
-        if context_summary and context_summary.schema:
-            schema_json = json.dumps(context_summary.schema, indent=2, ensure_ascii=False)
+        if context_summary and context_summary.context_schema:
+            schema_json = json.dumps(context_summary.context_schema, indent=2, ensure_ascii=False)
             prompt += """
 **📚 Schema completo del contexto (historial de análisis):**
 El siguiente schema muestra todas las keys que han sido analizadas en nodos anteriores:

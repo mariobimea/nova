@@ -284,8 +284,8 @@ class DataAnalyzerAgent(BaseAgent):
 
         # Preparar schema previo (si existe)
         previous_schema_section = ""
-        if context_summary and context_summary.schema:
-            previous_schema_json = json.dumps(context_summary.schema, indent=2, ensure_ascii=False)
+        if context_summary and context_summary.context_schema:
+            previous_schema_json = json.dumps(context_summary.context_schema, indent=2, ensure_ascii=False)
             previous_schema_section = f"""
 
 📚 **SCHEMA PREVIO (YA ANALIZADO, NO TOCAR):**

@@ -96,9 +96,10 @@ class ContextSummary(BaseModel):
         ...     ]
         ... )
     """
-    schema: Dict[str, Any] = Field(
+    context_schema: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Schema of all context keys with type and description"
+        description="Schema of all context keys with type and description",
+        alias="schema"  # Keep backward compatibility
     )
     analysis_history: List[AnalysisEntry] = Field(
         default_factory=list,
@@ -113,7 +114,7 @@ class ContextSummary(BaseModel):
         """Add a new analysis entry to history"""
         self.analysis_history.append(entry)
         # Merge new schema with existing
-        self.schema.update(entry.schema_generated)
+        self.context_schema.update(entry.schema_generated)
 
     def get_analyzed_keys(self) -> set:
         """Get all keys that have been analyzed so far"""
@@ -136,7 +137,7 @@ class ContextSummary(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         return {
-            "schema": self.schema,
+            "schema": self.context_schema,
             "analysis_history": [
                 {
                     "node_id": entry.node_id,
