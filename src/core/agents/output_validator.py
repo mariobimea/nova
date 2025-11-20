@@ -193,8 +193,6 @@ class OutputValidatorAgent(BaseAgent):
 2. Mira el contexto para ver los datos relevantes
 3. Verifica si la decisión ('{decision_value}') tiene sentido lógico
 
-**IMPORTANTE:**
-- Formato numérico europeo: "279,00" = 279 euros, "1.500,00" = 1500 euros
 - Un DecisionNode SOLO agrega la key de decisión, NO modifica otros datos (es normal)
 
 Responde JSON:
@@ -203,10 +201,6 @@ Responde JSON:
   "reason": "Explica por qué la decisión es correcta o incorrecta basándote en los datos"
 }}
 
-**Ejemplos:**
-✅ Task="decide if amount > 1000", context={{"total_amount": "279,00"}}, decision="false" → VÁLIDO (279 < 1000)
-❌ Task="decide if amount > 1000", context={{"total_amount": "279,00"}}, decision="true" → INVÁLIDO (279 < 1000, debería ser false)
-✅ Task="decide if amount > 1000", context={{"total_amount": "1.500,00"}}, decision="true" → VÁLIDO (1500 > 1000)
 """
         return prompt
 
