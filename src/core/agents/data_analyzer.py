@@ -3,11 +3,13 @@ DataAnalyzerAgent - Analiza data compleja generando código.
 
 Responsabilidad:
     Generar y ejecutar código Python que analiza la estructura de la data.
+    Ahora con soporte para análisis incremental usando Context Summary.
 
 Características:
     - Modelo: gpt-4o (análisis profundo, mejor razonamiento)
     - Ejecuciones: Hasta 3 veces (con retry loop en orchestrator)
     - Tool calling: NO (por ahora)
+    - Incremental: Solo analiza keys nuevas (no analizadas)
     - Costo: ~$0.005 por intento + E2B execution
 """
 
@@ -18,6 +20,7 @@ from openai import AsyncOpenAI
 
 from .base import BaseAgent, AgentResponse
 from .state import ContextState
+from ..context_summary import ContextSummary
 
 
 class DataAnalyzerAgent(BaseAgent):
@@ -32,21 +35,27 @@ class DataAnalyzerAgent(BaseAgent):
     async def execute(
         self,
         context_state: ContextState,
+        context_summary: Optional[ContextSummary] = None,
         error_history: List[Dict] = None
     ) -> AgentResponse:
         """
         Genera código de análisis SOLO (no ejecuta E2B).
+
+        Ahora con análisis incremental: solo analiza keys nuevas.
 
         La ejecución en E2B ahora se hace en el orchestrator para mantener
         el flujo consistente con CodeGenerator.
 
         Args:
             context_state: Estado del contexto con la data a analizar
+            context_summary: Resumen con historial de análisis (opcional)
             error_history: Errores de intentos previos (para retry)
 
         Returns:
             AgentResponse con:
                 - analysis_code: str (código generado)
+                - analyzed_keys: list (keys analizadas)
+                - skipped_keys: list (keys ya analizadas, saltadas)
                 - model: str (modelo usado)
                 - tokens: dict (input/output)
                 - cost_usd: float (costo de la llamada)
@@ -54,20 +63,62 @@ class DataAnalyzerAgent(BaseAgent):
         try:
             start_time = time.time()
 
-            # Generar código de análisis con IA
+            # 1. Identificar keys ya analizadas
+            analyzed_keys = set()
+            if context_summary:
+                analyzed_keys = context_summary.get_analyzed_keys()
+
+            # 2. Identificar keys actuales
+            current_keys = set(context_state.current.keys())
+
+            # 3. Solo analizar keys NUEVAS
+            new_keys = current_keys - analyzed_keys
+
+            if not new_keys:
+                # No hay nada nuevo, skip analysis
+                self.logger.info("⏭️ No new keys to analyze, skipping DataAnalyzer")
+
+                return self._create_response(
+                    success=True,
+                    data={
+                        "analysis_code": "# No new data to analyze",
+                        "analyzed_keys": [],
+                        "skipped_keys": list(analyzed_keys),
+                        "skipped": True,
+                        "model": self.model,
+                        "tokens": {"input": 0, "output": 0},
+                        "cost_usd": 0.0
+                    },
+                    execution_time_ms=(time.time() - start_time) * 1000
+                )
+
+            # 4. Extraer solo las keys nuevas
+            new_context = {k: context_state.current[k] for k in new_keys if k in context_state.current}
+
+            self.logger.info(f"🔍 Analyzing {len(new_keys)} new keys: {list(new_keys)}")
+            self.logger.info(f"⏭️ Skipping {len(analyzed_keys)} already analyzed keys: {list(analyzed_keys)[:5]}...")
+
+            # 5. Generar código de análisis SOLO para keys nuevas
             analysis_code, ai_metadata = await self._generate_analysis_code(
-                context_state.current,
-                error_history or []
+                new_context,
+                error_history or [],
+                context_summary=context_summary
             )
 
             execution_time_ms = (time.time() - start_time) * 1000
 
-            self.logger.info(f"Código de análisis generado ({len(analysis_code)} caracteres)")
+            self.logger.info(
+                f"Código de análisis generado ({len(analysis_code)} caracteres) "
+                f"para {len(new_keys)} keys nuevas"
+            )
 
             return self._create_response(
                 success=True,
                 data={
                     "analysis_code": analysis_code,
+                    "analyzed_keys": list(new_keys),
+                    "skipped_keys": list(analyzed_keys),
+                    "skipped": False,
                     **ai_metadata
                 },
                 execution_time_ms=execution_time_ms
@@ -81,7 +132,7 @@ class DataAnalyzerAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
-    def _summarize_value(self, value, max_depth=4, current_depth=0):
+    def _summarize_value(self, value, max_depth=4, current_depth=0, key_name=None):
         """
         Truncamiento inteligente: solo trunca data "opaca" (PDFs base64, CSVs largos, etc).
         Preserva dicts/listas normales completos para que el LLM los pueda leer.
@@ -94,7 +145,33 @@ class DataAnalyzerAgent(BaseAgent):
         - Strings < 500 chars
         - Dicts/listas normales (hasta depth=4)
         - Números, booleanos, None
+        - Keys críticas (database_schemas, workflow_config, etc)
         """
+        # Keys que NUNCA se truncan (metadatos necesarios para CodeGenerator)
+        NEVER_TRUNCATE_KEYS = {
+            'database_schemas',  # Schema de tablas DB (necesario para generar SQL correcto)
+            'workflow_config',   # Configuración del workflow
+            'node_config',       # Configuración del nodo actual
+        }
+
+        # Si es una key crítica, pasar valor completo sin truncar
+        if key_name in NEVER_TRUNCATE_KEYS:
+            if isinstance(value, (dict, list)):
+                # Pasar completo pero seguir resumiendo valores internos
+                if isinstance(value, dict):
+                    return {
+                        k: self._summarize_value(v, max_depth, current_depth + 1, key_name=k)
+                        for k, v in value.items()
+                    }
+                else:  # list
+                    return [
+                        self._summarize_value(item, max_depth, current_depth + 1)
+                        for item in value
+                    ]
+            else:
+                # Pasar valor primitivo completo
+                return value
+
         # Prevent infinite recursion
         if current_depth >= max_depth:
             return f"<max depth reached: {type(value).__name__}>"
@@ -171,7 +248,7 @@ class DataAnalyzerAgent(BaseAgent):
             # ✅ CAMBIO CRÍTICO: Mostrar TODO el dict (no truncar)
             # Recursivamente resumir valores pero mantener todas las keys
             return {
-                k: self._summarize_value(v, max_depth, current_depth + 1)
+                k: self._summarize_value(v, max_depth, current_depth + 1, key_name=k)
                 for k, v in value.items()
             }
 
@@ -182,14 +259,16 @@ class DataAnalyzerAgent(BaseAgent):
     async def _generate_analysis_code(
         self,
         context: Dict,
-        error_history: List[Dict]
+        error_history: List[Dict],
+        context_summary: Optional[ContextSummary] = None
     ) -> tuple[str, dict]:
         """
         Genera código Python que analiza la data.
 
         Args:
-            context: Contexto a analizar
+            context: Contexto a analizar (solo keys nuevas)
             error_history: Errores de intentos previos
+            context_summary: Resumen con schema de keys ya analizadas
 
         Returns:
             tuple: (code, ai_metadata) donde ai_metadata contiene tokens, costo, modelo
@@ -198,13 +277,34 @@ class DataAnalyzerAgent(BaseAgent):
         # Preparar schema del contexto con estructura detallada
         context_schema = {}
         for key, value in context.items():
-            context_schema[key] = self._summarize_value(value)
+            context_schema[key] = self._summarize_value(value, key_name=key)
 
         # Serializar context_schema a JSON string (fuera del f-string para evitar problemas con {})
         context_schema_json = json.dumps(context_schema, indent=2, ensure_ascii=False)
 
+        # Preparar schema previo (si existe)
+        previous_schema_section = ""
+        if context_summary and context_summary.schema:
+            previous_schema_json = json.dumps(context_summary.schema, indent=2, ensure_ascii=False)
+            previous_schema_section = f"""
+
+📚 **SCHEMA PREVIO (YA ANALIZADO, NO TOCAR):**
+```json
+{previous_schema_json}
+```
+
+Las keys arriba YA fueron analizadas en nodos anteriores.
+NO las analices de nuevo. Solo enfócate en las keys NUEVAS que ves abajo en el contexto actual.
+"""
+
         # Usar concatenación de strings en lugar de f-string para evitar conflicto con {} del JSON
         prompt = """Genera código Python que ANALIZA ÚNICAMENTE data "opaca" que el LLM no puede leer directamente.
+
+🎯 **TU ROL: Analizar SOLO data truncada (y solo data NUEVA)**"""
+
+        prompt += previous_schema_section
+
+        prompt += """
 
 🎯 **TU ROL: Analizar SOLO data truncada**
 
