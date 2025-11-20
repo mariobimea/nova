@@ -5,10 +5,10 @@ Responsabilidad:
     Validar el resultado DESPUÉS de ejecutar (validación semántica).
 
 Características:
-    - Modelo: gpt-4o-mini (validación simple)
+    - Modelo: gpt-4o (validación robusta y precisa)
     - Ejecuciones: Después de cada ejecución exitosa en E2B
     - Tool calling: NO
-    - Costo: ~$0.0005 por ejecución
+    - Costo: ~$0.002 por ejecución
 """
 
 from typing import Dict
@@ -25,7 +25,7 @@ class OutputValidatorAgent(BaseAgent):
     def __init__(self, openai_client: AsyncOpenAI):
         super().__init__("OutputValidator")
         self.client = openai_client
-        self.model = "gpt-4o-mini"
+        self.model = "gpt-4o"
 
     async def execute(
         self,
@@ -104,7 +104,8 @@ class OutputValidatorAgent(BaseAgent):
             usage = response.usage
             tokens_input = usage.prompt_tokens if usage else 0
             tokens_output = usage.completion_tokens if usage else 0
-            cost_usd = (tokens_input * 0.150 / 1_000_000) + (tokens_output * 0.600 / 1_000_000)
+            # Pricing gpt-4o: $2.50 per 1M input tokens, $10.00 per 1M output tokens
+            cost_usd = (tokens_input * 2.50 / 1_000_000) + (tokens_output * 10.00 / 1_000_000)
 
             result["model"] = self.model
             result["tokens"] = {
