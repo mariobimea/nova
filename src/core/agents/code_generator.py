@@ -404,40 +404,25 @@ NO copies estos valores al código. Usa `context['key']` para acceder a los valo
 **🔀 IMPORTANTE - ESTE ES UN NODO DE DECISIÓN (DecisionNode):**
 
 Los DecisionNodes evalúan una condición y deciden qué rama del workflow seguir.
-Tu código DEBE:
 
-1. **Evaluar la condición** descrita en la tarea
-2. **Establecer `context['{decision_key}']`** con el valor de la rama a seguir
-3. El valor de `{decision_key}` debe ser un string que coincida con las condiciones definidas en el workflow
+**REGLAS ESTRICTAS:**
+1. Evalúa la condición descrita en la tarea
+2. Establece `context['{decision_key}']` con el resultado
+3. **SOLO usa los strings 'true' o 'false'** (minúsculas)
 
-**Ejemplo de código para DecisionNode:**
+**Valores válidos:**
+- ✅ CORRECTO: `context['{decision_key}'] = 'true'`
+- ✅ CORRECTO: `context['{decision_key}'] = 'false'`
+- ❌ INCORRECTO: `True`, `False`, `'yes'`, `'no'`, `'accepted'`, `'approved'`, etc.
 
+**Output requerido:**
+Tu código DEBE terminar imprimiendo:
 ```python
-# Evaluar la condición (ejemplo: verificar si hay PDF adjunto)
-has_pdf = len(context.get('email_attachments', [])) > 0
-
-# REQUERIDO: Establecer {decision_key} con 'true' o 'false'
-if has_pdf:
-    context['{decision_key}'] = 'true'
-else:
-    context['{decision_key}'] = 'false'
-
-# IMPORTANTE: Imprimir SOLO los cambios realizados, no todo el contexto
-# Esto evita sobrescribir datos existentes que no cambiaron
-context_updates = {{
-    '{decision_key}': context['{decision_key}']
-    # Solo incluye las keys que modificaste
-}}
-print(json.dumps({{
-    "status": "success",
-    "context_updates": context_updates
-}}, ensure_ascii=False))
+context_updates = {{'{decision_key}': 'true'}}  # o 'false' según la evaluación
+print(json.dumps({{"status": "success", "context_updates": context_updates}}, ensure_ascii=False))
 ```
 
-⚠️ **CRÍTICO:**
-- El código DEBE establecer `context['{decision_key}']` o fallará
-- Los valores típicos son: 'true', 'false', 'yes', 'no', 'approved', 'rejected', etc.
-- ⚠️ SOLO imprime las keys que MODIFICASTE, NO todo el contexto
+**IMPORTANTE:** El GraphEngine espera EXACTAMENTE los strings 'true' o 'false' (minúsculas). No uses ningún otro valor.
 """
         else:
             # Standard instructions for ActionNode
