@@ -115,7 +115,7 @@ def execute_workflow_task(
                 logger.info(f"Task {task_id}: Loading credentials for client '{client_slug}'")
 
                 try:
-                    from ..models.credentials import get_email_credentials, get_database_credentials
+                    from ..models.credentials import get_email_credentials, get_database_credentials, get_database_schemas
 
                     # Load email credentials
                     email_creds = get_email_credentials(client_slug)
@@ -139,6 +139,14 @@ def execute_workflow_task(
                         "db_user": db_creds.db_user,
                         "db_password": db_creds.db_password,
                     })
+
+                    # Load database schemas
+                    db_schemas = get_database_schemas(client_slug)
+                    if db_schemas:
+                        initial_context["database_schemas"] = db_schemas
+                        logger.info(f"Task {task_id}: Loaded {len(db_schemas)} database schema(s): {list(db_schemas.keys())}")
+                    else:
+                        logger.info(f"Task {task_id}: No database schemas configured for client")
 
                     logger.info(f"Task {task_id}: Credentials loaded successfully")
 

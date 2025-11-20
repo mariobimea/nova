@@ -312,6 +312,68 @@ def get_all_credentials(client_slug: str) -> Dict[str, Any]:
     }
 
 
+def get_database_schemas(client_slug: str) -> Dict[str, Any]:
+    """
+    Get database table schemas for a client.
+
+    Returns schema definitions for all tables configured for this client.
+    This allows code generators to know which columns exist before generating SQL.
+
+    Args:
+        client_slug: Client identifier (e.g., "idom")
+
+    Returns:
+        Dict mapping table names to their schema definitions:
+        {
+            "invoices": {
+                "columns": ["id", "email_from", "total_amount", ...],
+                "types": {"id": "SERIAL", "email_from": "VARCHAR(255)", ...},
+                "nullable": {"id": False, "email_from": False, ...},
+                "primary_key": ["id"],
+                "defaults": {"currency": "EUR"}
+            },
+            "orders": {...}
+        }
+
+    Example:
+        schemas = get_database_schemas("idom")
+
+        # Check which columns exist before generating INSERT
+        if "invoices" in schemas:
+            available_columns = schemas["invoices"]["columns"]
+            if "email_from" in available_columns:
+                # Safe to insert into email_from column
+                pass
+    """
+    conn = _get_nova_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Get client ID
+        client_id = get_client_id(client_slug)
+
+        # Get all schemas for this client
+        cursor.execute("""
+            SELECT table_name, schema_definition
+            FROM client_database_schemas
+            WHERE client_id = %s
+            ORDER BY table_name
+        """, (client_id,))
+
+        results = cursor.fetchall()
+
+        # Build dict of table_name -> schema_definition
+        schemas = {}
+        for table_name, schema_def in results:
+            schemas[table_name] = schema_def
+
+        return schemas
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
 # Backward compatibility with old function name
 def get_client_db_connection(client_slug: str):
     """

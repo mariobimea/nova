@@ -1027,3 +1027,196 @@ def get_chain_of_work(execution_id: int, db: Session = Depends(get_db)):
         "entries": entries,
         "total": len(entries)
     }
+
+
+# ============================================================================
+# DATABASE SCHEMAS ENDPOINTS
+# ============================================================================
+
+@app.get(
+    "/clients/{client_id}/database-schemas",
+    tags=["Database Schemas"],
+    summary="List database schemas for a client"
+)
+def list_database_schemas(client_id: int, db: Session = Depends(get_db)):
+    """
+    List all database table schemas configured for a client.
+
+    Returns schema definitions that tell NOVA which columns exist
+    in each table before generating SQL code.
+    """
+    from ..models.database_schema import ClientDatabaseSchema
+
+    schemas = db.query(ClientDatabaseSchema).filter(
+        ClientDatabaseSchema.client_id == client_id
+    ).all()
+
+    return {
+        "client_id": client_id,
+        "schemas": [s.to_dict() for s in schemas],
+        "total": len(schemas)
+    }
+
+
+@app.get(
+    "/clients/{client_id}/database-schemas/{schema_id}",
+    tags=["Database Schemas"],
+    summary="Get a specific database schema"
+)
+def get_database_schema(client_id: int, schema_id: int, db: Session = Depends(get_db)):
+    """Get details of a specific database schema"""
+    from ..models.database_schema import ClientDatabaseSchema
+
+    schema = db.query(ClientDatabaseSchema).filter(
+        ClientDatabaseSchema.id == schema_id,
+        ClientDatabaseSchema.client_id == client_id
+    ).first()
+
+    if not schema:
+        raise HTTPException(status_code=404, detail="Schema not found")
+
+    return schema.to_dict()
+
+
+@app.post(
+    "/clients/{client_id}/database-schemas",
+    tags=["Database Schemas"],
+    summary="Create a new database schema",
+    status_code=201
+)
+def create_database_schema(
+    client_id: int,
+    schema_data: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Create a new database table schema for a client.
+
+    Request body example:
+    ```json
+    {
+        "database_credential_id": 1,
+        "table_name": "invoices",
+        "schema_definition": {
+            "columns": ["id", "email_from", "total_amount", "currency"],
+            "types": {
+                "id": "SERIAL",
+                "email_from": "VARCHAR(255)",
+                "total_amount": "DECIMAL(10,2)",
+                "currency": "VARCHAR(3)"
+            },
+            "nullable": {
+                "id": false,
+                "email_from": false,
+                "total_amount": false,
+                "currency": true
+            },
+            "primary_key": ["id"],
+            "defaults": {
+                "currency": "EUR"
+            }
+        },
+        "description": "Invoice table schema"
+    }
+    ```
+    """
+    from ..models.database_schema import ClientDatabaseSchema
+
+    # Check if schema for this table already exists
+    existing = db.query(ClientDatabaseSchema).filter(
+        ClientDatabaseSchema.client_id == client_id,
+        ClientDatabaseSchema.table_name == schema_data.get("table_name")
+    ).first()
+
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Schema for table '{schema_data.get('table_name')}' already exists"
+        )
+
+    # Create new schema
+    new_schema = ClientDatabaseSchema(
+        client_id=client_id,
+        database_credential_id=schema_data.get("database_credential_id"),
+        table_name=schema_data.get("table_name"),
+        schema_definition=schema_data.get("schema_definition"),
+        description=schema_data.get("description")
+    )
+
+    db.add(new_schema)
+    db.commit()
+    db.refresh(new_schema)
+
+    logger.info(f"Created database schema for client {client_id}, table '{new_schema.table_name}'")
+
+    return new_schema.to_dict()
+
+
+@app.put(
+    "/clients/{client_id}/database-schemas/{schema_id}",
+    tags=["Database Schemas"],
+    summary="Update a database schema"
+)
+def update_database_schema(
+    client_id: int,
+    schema_id: int,
+    schema_data: dict,
+    db: Session = Depends(get_db)
+):
+    """Update an existing database schema"""
+    from ..models.database_schema import ClientDatabaseSchema
+    from datetime import datetime
+
+    schema = db.query(ClientDatabaseSchema).filter(
+        ClientDatabaseSchema.id == schema_id,
+        ClientDatabaseSchema.client_id == client_id
+    ).first()
+
+    if not schema:
+        raise HTTPException(status_code=404, detail="Schema not found")
+
+    # Update fields
+    if "database_credential_id" in schema_data:
+        schema.database_credential_id = schema_data["database_credential_id"]
+    if "table_name" in schema_data:
+        schema.table_name = schema_data["table_name"]
+    if "schema_definition" in schema_data:
+        schema.schema_definition = schema_data["schema_definition"]
+    if "description" in schema_data:
+        schema.description = schema_data["description"]
+
+    schema.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(schema)
+
+    logger.info(f"Updated database schema {schema_id} for client {client_id}")
+
+    return schema.to_dict()
+
+
+@app.delete(
+    "/clients/{client_id}/database-schemas/{schema_id}",
+    tags=["Database Schemas"],
+    summary="Delete a database schema",
+    status_code=204
+)
+def delete_database_schema(client_id: int, schema_id: int, db: Session = Depends(get_db)):
+    """Delete a database schema"""
+    from ..models.database_schema import ClientDatabaseSchema
+
+    schema = db.query(ClientDatabaseSchema).filter(
+        ClientDatabaseSchema.id == schema_id,
+        ClientDatabaseSchema.client_id == client_id
+    ).first()
+
+    if not schema:
+        raise HTTPException(status_code=404, detail="Schema not found")
+
+    table_name = schema.table_name
+    db.delete(schema)
+    db.commit()
+
+    logger.info(f"Deleted database schema for client {client_id}, table '{table_name}'")
+
+    return None
