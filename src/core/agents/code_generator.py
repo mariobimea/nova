@@ -335,9 +335,30 @@ Este schema te ayuda a entender:
 
             prompt += """
 Usa esta información para generar código que aproveche TODA la data disponible, no solo la que se acaba de analizar.
+
+"""
+            # 🔥 NUEVO: Extraer y mostrar TODOS los insights del schema (de nodos previos)
+            all_insights = {}
+            for key, schema_entry in context_summary.context_schema.items():
+                if isinstance(schema_entry, dict) and "insights" in schema_entry:
+                    all_insights[key] = schema_entry["insights"]
+
+            if all_insights:
+                all_insights_json = json.dumps(all_insights, indent=2, ensure_ascii=False)
+                prompt += """
+**🔍 Insights de análisis previos (de nodos anteriores):**
+Los siguientes insights fueron obtenidos al analizar la data en nodos previos.
+ÚSALOS para tomar decisiones correctas sobre cómo procesar la data:
+""" + all_insights_json + """
+
+⚠️ **MUY IMPORTANTE:** Estos insights son CRUCIALES para elegir la estrategia correcta:
+- Si ves `has_text: false` en un PDF → Usa Google Cloud Vision OCR (no PyMuPDF)
+- Si ves `pages: N` → Sabes cuántas páginas procesar
+- Si ves `type: "pdf_scanned"` → Es un PDF escaneado sin capa de texto
+
 """
 
-        # Agregar insights si existen
+        # Agregar insights del nodo ACTUAL (si existen)
         if data_insights:
             data_insights_json = json.dumps(data_insights, indent=2)
             prompt += """
