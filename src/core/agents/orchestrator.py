@@ -811,6 +811,13 @@ class MultiAgentOrchestrator:
                 }
             }
 
+            # 🔥 DEBUG: Verificar qué estamos retornando
+            self.logger.info(f"🔍 DEBUG - Orchestrator returning result:")
+            self.logger.info(f"   Keys in result: {list(result.keys())}")
+            self.logger.info(f"   Has 'has_pdf_decision'?: {'has_pdf_decision' in result}")
+            if 'has_pdf_decision' in result:
+                self.logger.info(f"   Value of 'has_pdf_decision': {result['has_pdf_decision']}")
+
             self.logger.info(
                 f"✅ Workflow completado. Total time: {execution_state.get_total_time_ms():.2f}ms, "
                 f"Steps registrados: {len(steps_to_persist)}"
