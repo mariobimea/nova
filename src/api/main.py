@@ -1220,3 +1220,163 @@ def delete_database_schema(client_id: int, schema_id: int, db: Session = Depends
     logger.info(f"Deleted database schema for client {client_id}, table '{table_name}'")
 
     return None
+
+
+# ============================================================================
+# CACHE ENDPOINTS
+# ============================================================================
+
+@app.get(
+    "/cache/stats",
+    tags=["Cache"],
+    summary="Get code cache performance statistics"
+)
+async def get_cache_stats(db: Session = Depends(get_db)):
+    """
+    Get performance statistics for the code cache.
+
+    Returns metrics including:
+    - Total cached codes
+    - Total cache hits (reuses)
+    - Total cost saved
+    - Success rate
+    - Top most-reused codes
+
+    Example response:
+    ```json
+    {
+        "total_cached_codes": 45,
+        "total_cache_hits": 180,
+        "total_cost_saved_usd": 0.54,
+        "avg_reuse_per_code": 4.0,
+        "overall_success_rate": 0.95,
+        "total_successes": 171,
+        "total_failures": 9,
+        "top_codes": [...]
+    }
+    ```
+    """
+    from ..core.cache_manager import CodeCacheManager
+
+    cache_manager = CodeCacheManager(db)
+    stats = await cache_manager.get_stats()
+
+    return stats
+
+
+@app.get(
+    "/cache/entries",
+    tags=["Cache"],
+    summary="List all cache entries"
+)
+def list_cache_entries(
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
+    """
+    List all code cache entries with pagination.
+
+    Query params:
+    - limit: Number of entries to return (default: 50, max: 1000)
+    - offset: Number of entries to skip (default: 0)
+
+    Returns list of cache entries sorted by times_reused (desc).
+    """
+    from ..models.code_cache import CodeCache
+
+    # Validate limits
+    limit = min(limit, 1000)
+
+    entries = db.query(CodeCache).order_by(
+        CodeCache.times_reused.desc()
+    ).limit(limit).offset(offset).all()
+
+    total = db.query(CodeCache).count()
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "entries": [entry.to_dict() for entry in entries]
+    }
+
+
+@app.get(
+    "/cache/entries/{cache_key}",
+    tags=["Cache"],
+    summary="Get a specific cache entry"
+)
+def get_cache_entry(cache_key: str, db: Session = Depends(get_db)):
+    """
+    Get details of a specific cache entry by cache_key.
+
+    Returns full cache entry including:
+    - Generated code
+    - Usage statistics
+    - Original prompt
+    - Cost and token info
+    """
+    from ..models.code_cache import CodeCache
+
+    entry = db.query(CodeCache).filter(
+        CodeCache.cache_key == cache_key
+    ).first()
+
+    if not entry:
+        raise HTTPException(status_code=404, detail="Cache entry not found")
+
+    return {
+        **entry.to_dict(),
+        "generated_code": entry.generated_code,
+        "original_prompt": entry.original_prompt
+    }
+
+
+@app.delete(
+    "/cache/entries/{cache_key}",
+    tags=["Cache"],
+    summary="Delete a cache entry (invalidation)",
+    status_code=204
+)
+async def delete_cache_entry(cache_key: str, db: Session = Depends(get_db)):
+    """
+    Delete (invalidate) a specific cache entry.
+
+    Use this when:
+    - Cached code is consistently failing
+    - Code is outdated (API changes, etc.)
+    - Manual cache invalidation needed
+    """
+    from ..core.cache_manager import CodeCacheManager
+
+    cache_manager = CodeCacheManager(db)
+    await cache_manager.delete(cache_key)
+
+    return None
+
+
+@app.delete(
+    "/cache/cleanup",
+    tags=["Cache"],
+    summary="Clean up old cache entries",
+    status_code=200
+)
+async def cleanup_cache(days_old: int = 90, db: Session = Depends(get_db)):
+    """
+    Clean up cache entries that haven't been used recently.
+
+    Query params:
+    - days_old: Delete entries not used in this many days (default: 90)
+
+    Returns number of entries deleted.
+    """
+    from ..core.cache_manager import CodeCacheManager
+
+    cache_manager = CodeCacheManager(db)
+    deleted_count = await cache_manager.cleanup_old_entries(days_old)
+
+    return {
+        "deleted_count": deleted_count,
+        "days_old": days_old
+    }

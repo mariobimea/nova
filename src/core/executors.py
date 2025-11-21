@@ -30,6 +30,8 @@ from .exceptions import (
 from .circuit_breaker import e2b_circuit_breaker
 from .context_validator import is_json_serializable, get_context_stats
 from .output_validator import auto_validate_output
+from .cache_manager import CodeCacheManager
+from .cache_utils import generate_cache_key
 
 logger = logging.getLogger(__name__)
 
@@ -110,11 +112,11 @@ class CachedExecutor(ExecutorStrategy):
 
     def __init__(self, db_session: Optional[Any] = None, default_model: str = "gpt-4o-mini"):
         """
-        Initialize CachedExecutor with Multi-Agent Architecture.
+        Initialize CachedExecutor with Multi-Agent Architecture + Code Cache.
 
         Args:
-            db_session: Optional SQLAlchemy session for cache lookups (Phase 2).
-                       Currently unused in Phase 1 (no cache implementation yet).
+            db_session: Optional SQLAlchemy session for code cache.
+                       If provided, enables caching of AI-generated code.
             default_model: Default model to use if not specified in workflow/node.
                           Defaults to "gpt-4o-mini" (cheapest OpenAI model).
 
@@ -128,7 +130,7 @@ class CachedExecutor(ExecutorStrategy):
         from .e2b.executor import E2BExecutor as AgentE2BExecutor
         from .integrations.rag_client import RAGClient
 
-        # Store db_session for future cache implementation (Phase 2)
+        # Store db_session
         self.db_session = db_session
 
         # Store default model
@@ -148,6 +150,9 @@ class CachedExecutor(ExecutorStrategy):
             api_key=os.getenv("E2B_API_KEY"),
             template=template_id
         )
+
+        # Store E2B executor for cache hits (direct code execution)
+        self.e2b = e2b_executor
 
         # Initialize RAG client (optional - for doc search)
         rag_client = None
@@ -181,7 +186,11 @@ class CachedExecutor(ExecutorStrategy):
             max_retries=3
         )
 
-        logger.info(f"CachedExecutor initialized with Multi-Agent Architecture (model: {default_model})")
+        # Initialize Code Cache Manager
+        self.cache_manager = CodeCacheManager(db_session) if db_session else None
+
+        cache_status = "enabled" if self.cache_manager else "disabled (no DB session)"
+        logger.info(f"CachedExecutor initialized with Multi-Agent Architecture (model: {default_model}, cache: {cache_status})")
 
     async def execute(
         self,
@@ -237,24 +246,135 @@ class CachedExecutor(ExecutorStrategy):
         logger.info(f"   Context keys: {list(context.keys())}")
         logger.info(f"   Timeout: {timeout}s")
 
-        try:
-            # Extract node_type and node_id from node dict if available
-            node_type = None
-            node_id = None
-            if node and isinstance(node, dict):
-                node_type = node.get("type")
-                node_id = node.get("id")
-                logger.info(f"   Node type: {node_type}")
-                logger.info(f"   Node ID: {node_id}")
+        # Extract node_type, node_id, workflow_id
+        node_type = None
+        node_id = None
+        workflow_id = None
 
-            # Execute workflow using orchestrator
+        if node and isinstance(node, dict):
+            node_type = node.get("type")
+            node_id = node.get("id")
+            logger.info(f"   Node type: {node_type}")
+            logger.info(f"   Node ID: {node_id}")
+
+        if workflow and isinstance(workflow, dict):
+            workflow_id = workflow.get("id")
+
+        # ═══════════════════════════════════════════════════════
+        # CACHE LOOKUP (if cache enabled)
+        # ═══════════════════════════════════════════════════════
+        if self.cache_manager:
+            try:
+                cached_entry = await self.cache_manager.lookup(prompt_task, context)
+
+                if cached_entry:
+                    # ✅ CACHE HIT - Execute cached code directly
+                    logger.info(f"🎯 Cache HIT! Executing cached code (reused {cached_entry.times_reused} times)")
+
+                    try:
+                        # Execute cached code with E2B
+                        import time
+                        start_time = time.time()
+
+                        result = await self.e2b.execute(
+                            code=cached_entry.generated_code,
+                            context=context,
+                            timeout=timeout
+                        )
+
+                        execution_time_ms = (time.time() - start_time) * 1000
+
+                        # Record success
+                        await self.cache_manager.record_success(
+                            cache_key=cached_entry.cache_key,
+                            execution_time_ms=execution_time_ms
+                        )
+
+                        # Add cache metadata to result
+                        result['_cache_metadata'] = {
+                            'cache_hit': True,
+                            'cache_key': cached_entry.cache_key[:16] + "...",
+                            'times_reused': cached_entry.times_reused + 1,
+                            'original_cost_usd': float(cached_entry.cost_usd) if cached_entry.cost_usd else 0.0,
+                            'cost_saved_usd': float(cached_entry.cost_usd) if cached_entry.cost_usd else 0.0
+                        }
+
+                        logger.info(f"✅ Cached code executed successfully (saved ${cached_entry.cost_usd:.4f})")
+                        return result
+
+                    except Exception as e:
+                        # Cached code failed - fallback to AI generation
+                        logger.warning(f"⚠️  Cached code failed: {e}")
+                        await self.cache_manager.record_failure(
+                            cache_key=cached_entry.cache_key,
+                            error_message=str(e)
+                        )
+
+                        # Check if we should invalidate this cache entry
+                        if cached_entry.success_rate < 0.7 and cached_entry.times_reused >= 3:
+                            logger.error(f"🗑️  Cache entry unreliable, deleting: {cached_entry.cache_key[:16]}...")
+                            await self.cache_manager.delete(cached_entry.cache_key)
+
+                        logger.info(f"🔄 Falling back to AI generation")
+                        # Continue to AI generation below
+
+            except Exception as e:
+                logger.warning(f"Cache lookup failed: {e}. Continuing with AI generation.")
+
+        # ═══════════════════════════════════════════════════════
+        # CACHE MISS or NO CACHE - Generate with AI
+        # ═══════════════════════════════════════════════════════
+        try:
             result = await self.orchestrator.execute_workflow(
                 task=prompt_task,
                 context=context,
                 timeout=timeout,
-                node_type=node_type,  # Pass node type to orchestrator
-                node_id=node_id  # Pass node ID to orchestrator
+                node_type=node_type,
+                node_id=node_id
             )
+
+            # ═══════════════════════════════════════════════════════
+            # SAVE TO CACHE (if enabled and execution successful)
+            # ═══════════════════════════════════════════════════════
+            if self.cache_manager and result.get('status') == 'success':
+                try:
+                    # Extract metadata from orchestrator result
+                    ai_metadata = result.get('_ai_metadata', {})
+                    code_gen_meta = ai_metadata.get('code_generation', {})
+
+                    generated_code = code_gen_meta.get('generated_code', '')
+                    model = code_gen_meta.get('model', 'gpt-4o-mini')
+                    tokens_used = code_gen_meta.get('tokens_used', 0)
+                    cost_usd = code_gen_meta.get('cost_usd', 0.0)
+
+                    if generated_code:
+                        await self.cache_manager.save(
+                            prompt=prompt_task,
+                            context=context,
+                            generated_code=generated_code,
+                            model=model,
+                            tokens_used=tokens_used,
+                            cost_usd=cost_usd,
+                            workflow_id=workflow_id,
+                            node_id=node_id
+                        )
+
+                        # Add cache metadata to result
+                        result['_cache_metadata'] = {
+                            'cache_hit': False,
+                            'cache_key': generate_cache_key(prompt_task, context)[:16] + "...",
+                            'saved_for_future': True
+                        }
+
+                        logger.info(f"💾 Code saved to cache for future reuse")
+                    else:
+                        logger.warning(f"No generated code found in result, skipping cache save")
+
+                except Exception as e:
+                    logger.warning(f"Failed to save to cache: {e}")
+
+            elif self.cache_manager and result.get('status') != 'success':
+                logger.info(f"🚫 Not caching (execution failed)")
 
             logger.info(f"✅ Multi-Agent execution completed successfully")
             return result

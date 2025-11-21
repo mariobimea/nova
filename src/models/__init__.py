@@ -32,5 +32,6 @@ from .execution import Execution
 from .chain_of_work import ChainOfWork
 from .chain_of_work_step import ChainOfWorkStep
 from .database_schema import ClientDatabaseSchema
+from .code_cache import CodeCache
 
-__all__ = ["Base", "engine", "SessionLocal", "get_db", "Workflow", "Execution", "ChainOfWork", "ChainOfWorkStep", "ClientDatabaseSchema"]
+__all__ = ["Base", "engine", "SessionLocal", "get_db", "Workflow", "Execution", "ChainOfWork", "ChainOfWorkStep", "ClientDatabaseSchema", "CodeCache"]
