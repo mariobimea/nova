@@ -344,12 +344,19 @@ class CachedExecutor(ExecutorStrategy):
                     # Extract metadata from orchestrator result
                     code_gen_meta = ai_metadata.get('code_generation', {})
 
-                    generated_code = code_gen_meta.get('generated_code', '')
+                    # CodeGenerator returns {"code": "...", "model": "...", ...}
+                    generated_code = code_gen_meta.get('code', '')
                     model = code_gen_meta.get('model', 'gpt-4o-mini')
-                    tokens_used = code_gen_meta.get('tokens_used', 0)
-                    cost_usd = code_gen_meta.get('cost_usd', 0.0)
+
+                    # Calculate tokens and cost from timings metadata if available
+                    # TODO: CodeGenerator should return tokens_used and cost_usd
+                    tokens_used = 0  # Will be updated when CodeGenerator returns this
+                    cost_usd = 0.0   # Will be updated when CodeGenerator returns this
 
                     if generated_code:
+                        # Add generated_code to ai_metadata for engine to use in Chain of Work
+                        ai_metadata['generated_code'] = generated_code
+
                         await self.cache_manager.save(
                             prompt=prompt_task,
                             context=context,
@@ -368,12 +375,15 @@ class CachedExecutor(ExecutorStrategy):
                             'saved_for_future': True
                         }
 
-                        logger.info(f"💾 Code saved to cache for future reuse")
+                        logger.info(f"💾 Code saved to cache for future reuse (code length: {len(generated_code)} chars)")
                     else:
-                        logger.warning(f"No generated code found in result, skipping cache save")
+                        logger.warning(f"⚠️  No generated code found in code_generation metadata, skipping cache save")
+                        logger.warning(f"   code_generation keys: {list(code_gen_meta.keys())}")
 
                 except Exception as e:
-                    logger.warning(f"Failed to save to cache: {e}")
+                    logger.error(f"❌ Failed to save to cache: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
 
             elif self.cache_manager and execution_failed:
                 logger.info(f"🚫 Not caching (execution failed)")
