@@ -336,10 +336,12 @@ class CachedExecutor(ExecutorStrategy):
             # ═══════════════════════════════════════════════════════
             # SAVE TO CACHE (if enabled and execution successful)
             # ═══════════════════════════════════════════════════════
-            if self.cache_manager and result.get('status') == 'success':
+            ai_metadata = result.get('_ai_metadata', {})
+            execution_failed = ai_metadata.get('status') == 'failed' or ai_metadata.get('final_error')
+
+            if self.cache_manager and not execution_failed:
                 try:
                     # Extract metadata from orchestrator result
-                    ai_metadata = result.get('_ai_metadata', {})
                     code_gen_meta = ai_metadata.get('code_generation', {})
 
                     generated_code = code_gen_meta.get('generated_code', '')
@@ -373,7 +375,7 @@ class CachedExecutor(ExecutorStrategy):
                 except Exception as e:
                     logger.warning(f"Failed to save to cache: {e}")
 
-            elif self.cache_manager and result.get('status') != 'success':
+            elif self.cache_manager and execution_failed:
                 logger.info(f"🚫 Not caching (execution failed)")
 
             logger.info(f"✅ Multi-Agent execution completed successfully")
