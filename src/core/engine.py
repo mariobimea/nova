@@ -294,8 +294,8 @@ class GraphEngine:
 
                 # 🔥 NUEVO: Manejo diferente según executor type
                 if node.executor == "cached":
-                    # CachedExecutor retorna tupla (updated_context, context_manager)
-                    updated_context, context = await executor.execute(
+                    # CachedExecutor retorna tupla (updated_context, updated_context_manager)
+                    updated_context, updated_context_manager = await executor.execute(
                         code=code_or_prompt,
                         context=context.get_all(),
                         timeout=node.timeout,
@@ -303,6 +303,8 @@ class GraphEngine:
                         node={"id": node.id, "type": "action", "model": getattr(node, "model", None)},
                         context_manager=context  # 🔥 Pasar ContextManager
                     )
+                    # Reemplazar context con el actualizado
+                    context = updated_context_manager
                 else:
                     # E2BExecutor retorna solo Dict
                     updated_context = await executor.execute(
@@ -340,10 +342,10 @@ class GraphEngine:
                 logger.info(f"   updated_context content: {updated_context}")
                 logger.info(f"   context BEFORE update: {list(context.get_all().keys())}")
 
-                # 🔥 NOTA: Si usamos CachedExecutor, context ya fue actualizado arriba
-                # Si usamos E2BExecutor, debemos actualizar manualmente
-                if node.executor != "cached":
-                    context.update(updated_context)
+                # 🔥 SIEMPRE actualizamos el contexto con los datos del nodo
+                # Cuando es CachedExecutor, el orchestrator ya actualizó el ContextManager interno,
+                # pero aún necesitamos mergear updated_context por si hay datos adicionales
+                context.update(updated_context)
 
                 logger.info(f"   context AFTER update: {list(context.get_all().keys())}")
                 logger.info(f"   Did context gain new keys? {set(context.get_all().keys()) - set(input_context.keys())}")
@@ -381,8 +383,8 @@ class GraphEngine:
 
                 # 🔥 NUEVO: Manejo diferente según executor type
                 if node.executor == "cached":
-                    # CachedExecutor retorna tupla (updated_context, context_manager)
-                    updated_context, context = await executor.execute(
+                    # CachedExecutor retorna tupla (updated_context, updated_context_manager)
+                    updated_context, updated_context_manager = await executor.execute(
                         code=code_or_prompt,
                         context=context.get_all(),
                         timeout=node.timeout,
@@ -390,6 +392,8 @@ class GraphEngine:
                         node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)},
                         context_manager=context  # 🔥 Pasar ContextManager
                     )
+                    # Reemplazar context con el actualizado
+                    context = updated_context_manager
                 else:
                     # E2BExecutor retorna solo Dict
                     updated_context = await executor.execute(
@@ -407,10 +411,8 @@ class GraphEngine:
 
                 # E2BExecutor already extracted context_updates from the JSON output
                 # No need to check for wrapper again - just update directly
-                # 🔥 NOTA: Si usamos CachedExecutor, context ya fue actualizado arriba
-                # Si usamos E2BExecutor, debemos actualizar manualmente
-                if node.executor != "cached":
-                    context.update(updated_context)
+                # 🔥 SIEMPRE actualizamos el contexto con los datos del nodo
+                context.update(updated_context)
 
                 # Store actual executed code (not prompt)
                 # If AI generated code, use that. Otherwise use the prompt/code as-is
