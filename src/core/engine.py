@@ -29,6 +29,38 @@ import json
 
 from sqlalchemy.orm import Session
 
+
+def make_json_serializable(obj):
+    """
+    Recursively convert non-JSON-serializable objects to serializable format.
+
+    Handles:
+    - datetime → ISO 8601 string
+    - bytes → base64 string (for binary data)
+    - sets → lists
+    - custom objects → str(obj)
+    """
+    import base64
+
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return [make_json_serializable(item) for item in obj]
+    elif isinstance(obj, set):
+        return [make_json_serializable(item) for item in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, bytes):
+        # Base64 encode binary data
+        return base64.b64encode(obj).decode('ascii')
+    elif hasattr(obj, '__dict__'):
+        # Custom objects → convert to string
+        return str(obj)
+    else:
+        return obj
+
 from .nodes import create_node_from_dict, NodeType, StartNode, EndNode, ActionNode, DecisionNode
 from .executors import get_executor
 from .context import ContextManager
@@ -536,19 +568,20 @@ class GraphEngine:
                     steps_to_persist = ai_metadata.pop('_steps', [])  # Extraer y remover de ai_metadata
 
                     # 1. Crear entrada principal en ChainOfWork
+                    # Convert datetime objects to JSON-serializable format
                     chain_entry = ChainOfWork(
                         execution_id=execution.id,
                         node_id=metadata['node_id'],
                         node_type=metadata['node_type'],
                         code_executed=metadata.get('code_executed'),
-                        input_context=metadata['input_context'],
-                        output_result=metadata['output_result'],
+                        input_context=make_json_serializable(metadata['input_context']),
+                        output_result=make_json_serializable(metadata['output_result']),
                         execution_time=metadata['execution_time'],
                         status=metadata['status'],
                         error_message=metadata.get('error_message'),
                         decision_result=metadata.get('decision_result'),
                         path_taken=metadata.get('path_taken'),
-                        ai_metadata=ai_metadata,  # Sin _steps
+                        ai_metadata=make_json_serializable(ai_metadata),  # Sin _steps
                         timestamp=datetime.utcnow()
                     )
                     self.db_session.add(chain_entry)
@@ -655,19 +688,20 @@ class GraphEngine:
                     ai_metadata_failed = failed_metadata.get('ai_metadata', {}) or {}
                     steps_to_persist_failed = ai_metadata_failed.pop('_steps', [])
 
+                    # Convert datetime objects to JSON-serializable format
                     chain_entry = ChainOfWork(
                         execution_id=execution.id,
                         node_id=failed_metadata['node_id'],
                         node_type=failed_metadata['node_type'],
                         code_executed=failed_metadata.get('code_executed'),
-                        input_context=failed_metadata['input_context'],
-                        output_result=failed_metadata['output_result'],
+                        input_context=make_json_serializable(failed_metadata['input_context']),
+                        output_result=make_json_serializable(failed_metadata['output_result']),
                         execution_time=failed_metadata['execution_time'],
                         status=failed_metadata['status'],
                         error_message=failed_metadata.get('error_message'),
                         decision_result=failed_metadata.get('decision_result'),
                         path_taken=failed_metadata.get('path_taken'),
-                        ai_metadata=ai_metadata_failed,  # Sin _steps
+                        ai_metadata=make_json_serializable(ai_metadata_failed),  # Sin _steps
                         timestamp=datetime.utcnow()
                     )
                     self.db_session.add(chain_entry)
