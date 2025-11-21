@@ -98,7 +98,7 @@ async def test_imap_email_reading():
         print("\n⏳ Generating IMAP code with OpenAI and executing in E2B...")
         print("   (This may take ~10-15 seconds to connect to Gmail)")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=workflow_node['prompt'],
             context=context,
             timeout=workflow_node['timeout']

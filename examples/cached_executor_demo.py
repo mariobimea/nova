@@ -44,7 +44,7 @@ async def demo_simple_math():
     print(f"\nPrompt: {prompt}")
     print(f"Context: {context}")
 
-    result = await executor.execute(
+    result, metadata = await executor.execute(
         code=prompt,
         context=context,
         timeout=30
@@ -83,7 +83,7 @@ async def demo_data_processing():
     print(f"\nPrompt: {prompt}")
     print(f"Context: {context}")
 
-    result = await executor.execute(
+    result, metadata = await executor.execute(
         code=prompt,
         context=context,
         timeout=30
@@ -119,7 +119,7 @@ async def demo_json_parsing():
     print(f"\nPrompt: {prompt}")
     print(f"Context: (JSON with 3 products)")
 
-    result = await executor.execute(
+    result, metadata = await executor.execute(
         code=prompt,
         context=context,
         timeout=30
@@ -160,7 +160,7 @@ async def demo_integration_detection():
     print("    but it demonstrates integration detection and retry logic")
 
     try:
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=prompt,
             context=context,
             timeout=30
@@ -195,7 +195,7 @@ async def demo_cost_estimation():
     for task in tasks:
         print(f"\n📝 Task: {task}")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=task,
             context={},
             timeout=30

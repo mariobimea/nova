@@ -93,7 +93,7 @@ async def test_pdf_invoice_extraction():
         print("\n⏳ Generating code with OpenAI and executing in E2B...")
         print("   (This will take ~5-10 seconds)")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=workflow_node['prompt'],
             context=context,
             timeout=workflow_node['timeout']
@@ -211,7 +211,7 @@ async def test_simple_pdf_extraction():
         print(f"\n📝 Prompt: {prompt.strip()}")
         print(f"\n⏳ Executing...")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=prompt,
             context=context,
             timeout=60

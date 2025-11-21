@@ -45,7 +45,7 @@ context['message'] = 'Hello from E2B!'
         print(f"\nInitial context: {initial_context}")
         print(f"\nCode to execute:\n{code}")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=code,
             context=initial_context,
             timeout=10
@@ -91,7 +91,7 @@ context['status_code'] = response.status_code
 
         print(f"\nCode to execute:\n{code}")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=code,
             context=initial_context,
             timeout=15
@@ -129,7 +129,7 @@ context['result'] = undefined_variable * 2
         print(f"\nCode to execute (should fail):\n{code}")
 
         try:
-            result = await executor.execute(
+            result, metadata = await executor.execute(
                 code=code,
                 context={},
                 timeout=10
@@ -174,7 +174,7 @@ context['processed'] = True
         print(f"\nInitial context: {initial_context}")
         print(f"\nCode to execute:\n{code}")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=code,
             context=initial_context,
             timeout=10

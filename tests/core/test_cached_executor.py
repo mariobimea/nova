@@ -283,23 +283,25 @@ class TestExecute:
         executor._generate_code = AsyncMock(return_value="print('test')")
 
         # Mock E2B execution
-        executor.e2b_executor.execute = AsyncMock(return_value={
-            "result": "success"
-        })
+        executor.e2b_executor.execute = AsyncMock(return_value=(
+            {"result": "success"},
+            {}
+        ))
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code="Test task prompt",
             context={"key": "value"},
             timeout=30
         )
 
         assert result["result"] == "success"
-        assert "_ai_metadata" in result
-        assert result["_ai_metadata"]["model"] == "gpt-4o-mini"
-        assert result["_ai_metadata"]["prompt"] == "Test task prompt"
-        assert result["_ai_metadata"]["generated_code"] == "print('test')"
-        assert result["_ai_metadata"]["attempts"] == 1
-        assert result["_ai_metadata"]["cost_usd"] > 0
+        assert "_ai_metadata" not in result
+        assert "ai_metadata" in metadata
+        assert metadata["ai_metadata"]["model"] == "gpt-4o-mini"
+        assert metadata["ai_metadata"]["prompt"] == "Test task prompt"
+        assert metadata["ai_metadata"]["generated_code"] == "print('test')"
+        assert metadata["ai_metadata"]["attempts"] == 1
+        assert metadata["ai_metadata"]["cost_usd"] > 0
 
     @pytest.mark.asyncio
     async def test_execute_retry_on_execution_error(self, executor):
@@ -312,18 +314,18 @@ class TestExecute:
         executor.e2b_executor.execute = AsyncMock(
             side_effect=[
                 CodeExecutionError("First attempt failed", code="", error_details=""),
-                {"result": "success"}
+                ({"result": "success"}, {})
             ]
         )
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code="Test task",
             context={},
             timeout=30
         )
 
         assert result["result"] == "success"
-        assert result["_ai_metadata"]["attempts"] == 2
+        assert metadata["ai_metadata"]["attempts"] == 2
         assert executor._generate_code.call_count == 2
 
         # Verify error history was passed to build_prompt on second attempt
@@ -362,18 +364,18 @@ class TestExecute:
         executor.e2b_executor.execute = AsyncMock(
             side_effect=[
                 E2BTimeoutError("Timeout", timeout_seconds=30),
-                {"result": "success"}
+                ({"result": "success"}, {})
             ]
         )
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code="Test task",
             context={},
             timeout=30
         )
 
         assert result["result"] == "success"
-        assert result["_ai_metadata"]["attempts"] == 2
+        assert metadata["ai_metadata"]["attempts"] == 2
 
     @pytest.mark.asyncio
     async def test_execute_sandbox_error_retry(self, executor):
@@ -386,18 +388,18 @@ class TestExecute:
         executor.e2b_executor.execute = AsyncMock(
             side_effect=[
                 E2BSandboxError("Sandbox crashed", sandbox_id="test123"),
-                {"result": "success"}
+                ({"result": "success"}, {})
             ]
         )
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code="Test task",
             context={},
             timeout=30
         )
 
         assert result["result"] == "success"
-        assert result["_ai_metadata"]["attempts"] == 2
+        assert metadata["ai_metadata"]["attempts"] == 2
 
     @pytest.mark.asyncio
     async def test_execute_unexpected_error_no_retry(self, executor):
@@ -423,7 +425,7 @@ class TestExecute:
     async def test_execute_builds_prompt_correctly(self, executor):
         """Should build prompt with task and context."""
         executor._generate_code = AsyncMock(return_value="print('test')")
-        executor.e2b_executor.execute = AsyncMock(return_value={"result": "ok"})
+        executor.e2b_executor.execute = AsyncMock(return_value=({"result": "ok"}, {}))
 
         await executor.execute(
             code="Extract invoice total",
@@ -465,13 +467,14 @@ Generate Python code based on task and context.
 
             # Mock code generation and execution
             executor._generate_code = AsyncMock(return_value="result = 42")
-            executor.e2b_executor.execute = AsyncMock(return_value={"result": 42})
+            executor.e2b_executor.execute = AsyncMock(return_value=({"result": 42}, {}))
 
-            result = await executor.execute(
+            result, metadata = await executor.execute(
                 code="Calculate something",
                 context={},
                 timeout=30
             )
 
             assert result["result"] == 42
-            assert "_ai_metadata" in result
+            assert "_ai_metadata" not in result
+            assert "ai_metadata" in metadata

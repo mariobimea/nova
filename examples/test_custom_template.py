@@ -101,7 +101,7 @@ context['python_version'] = f"{sys.version_info.major}.{sys.version_info.minor}.
 
         print(f"\nTesting custom template libraries...")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=code,
             context=initial_context,
             timeout=15
@@ -171,7 +171,7 @@ except Exception as e:
     context['ocr_test'] = f'ERROR: {e}'
 """
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=code,
             context={},
             timeout=15

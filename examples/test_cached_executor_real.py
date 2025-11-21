@@ -42,7 +42,7 @@ async def test_simple_math():
     print(f"Expected cost: ~$0.001")
 
     try:
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=prompt,
             context=context,
             timeout=30
@@ -100,7 +100,7 @@ async def test_data_processing():
     print(f"Expected result: sum([7, 9, 11]) = 27")
 
     try:
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=prompt,
             context=context,
             timeout=30
@@ -142,7 +142,7 @@ async def test_string_manipulation():
     print(f"Expected result: 'DLROW OLLEH'")
 
     try:
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=prompt,
             context=context,
             timeout=30

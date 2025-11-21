@@ -68,7 +68,7 @@ async def create_test_invoice_pdf():
     """
 
     try:
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=create_pdf_prompt,
             context={},
             timeout=60
@@ -197,7 +197,7 @@ async def test_realistic_pdf_workflow():
         print(f"\n⏳ Executing node with CachedExecutor...")
         print(f"   (OpenAI will generate extraction code, E2B will execute)")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=workflow_node['prompt'],
             context=context,
             timeout=workflow_node['timeout']

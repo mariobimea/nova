@@ -50,7 +50,7 @@ async def test_metadata():
 
     try:
         logger.info("\n🚀 Starting execution...")
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=task,
             context=context,
             timeout=60

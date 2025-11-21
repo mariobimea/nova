@@ -71,7 +71,7 @@ If you cannot find a clear total amount, set it to 0.0"""
         print(f"\nPrompt:\n{prompt[:200]}...")
 
         # Execute with AI
-        result = await executor.execute(
+        result, exec_metadata = await executor.execute(
             code=prompt,  # CachedExecutor uses 'code' param for both code and prompts
             context=context,
             timeout=30
@@ -85,8 +85,8 @@ If you cannot find a clear total amount, set it to 0.0"""
         print(f"Total amount extracted: {result.get('total_amount')}")
 
         # Check AI metadata
-        if '_ai_metadata' in result:
-            metadata = result['_ai_metadata']
+        if exec_metadata and 'ai_metadata' in exec_metadata:
+            metadata = exec_metadata['ai_metadata']
             print(f"\nAI Metadata:")
             print(f"  Model: {metadata.get('model')}")
             print(f"  Tokens (input/output): {metadata.get('tokens_input')}/{metadata.get('tokens_output')}")
@@ -147,7 +147,7 @@ If you cannot find a clear total amount, set it to 0.0"""
         print(f"\nOCR Text:\n{context['ocr_text']}")
 
         # Execute
-        result = await executor.execute(
+        result, exec_metadata = await executor.execute(
             code=prompt,
             context=context,
             timeout=30
@@ -187,7 +187,7 @@ Output to context:
         print(f"\nContext: has_pdf = {context['has_pdf']}")
 
         # Execute
-        result = await executor.execute(
+        result, exec_metadata = await executor.execute(
             code=prompt,
             context=context,
             timeout=10

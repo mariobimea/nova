@@ -292,68 +292,39 @@ class GraphEngine:
                             f"ActionNode {node.id} must have 'code' attribute"
                         )
 
-                # 🔥 NUEVO: Manejo diferente según executor type
-                if node.executor == "cached":
-                    # CachedExecutor retorna tupla (updated_context, updated_context_manager)
-                    updated_context, updated_context_manager = await executor.execute(
-                        code=code_or_prompt,
-                        context=context.get_all(),
-                        timeout=node.timeout,
-                        workflow=workflow_definition,
-                        node={"id": node.id, "type": "action", "model": getattr(node, "model", None)},
-                        context_manager=context  # 🔥 Pasar ContextManager
-                    )
-                    # Reemplazar context con el actualizado
-                    context = updated_context_manager
-                else:
-                    # E2BExecutor retorna solo Dict
-                    updated_context = await executor.execute(
-                        code=code_or_prompt,
-                        context=context.get_all(),
-                        timeout=node.timeout,
-                        workflow=workflow_definition,
-                        node={"id": node.id, "type": "action", "model": getattr(node, "model", None)}
-                    )
+                # Execute code/prompt - all executors now return (result, metadata)
+                result, exec_metadata = await executor.execute(
+                    code=code_or_prompt,
+                    context=context.get_all(),
+                    context_manager=context,  # Pass by reference (CachedExecutor updates in-place)
+                    timeout=node.timeout,
+                    workflow=workflow_definition,
+                    node={"id": node.id, "type": "action", "model": getattr(node, "model", None)}
+                )
 
                 # DEBUG: Log what executor returned
                 logger.info(f"🔍 DEBUG after executor.execute() for node {node.id}:")
                 logger.info(f"   Executor type: {node.executor}")
-                logger.info(f"   updated_context keys: {list(updated_context.keys())}")
-                logger.info(f"   Has _ai_metadata: {'_ai_metadata' in updated_context}")
-                if "_ai_metadata" in updated_context:
-                    logger.info(f"   _ai_metadata present: {updated_context['_ai_metadata']}")
+                logger.info(f"   result keys: {list(result.keys())}")
+                logger.info(f"   metadata keys: {list(exec_metadata.keys())}")
 
-                # DEBUG: Store for inspection in chain_of_work
-                metadata["_debug_raw_keys"] = list(updated_context.keys())
-                metadata["_debug_raw_context"] = str(updated_context)[:500]  # First 500 chars
+                # Store metadata (includes cache + AI + execution)
+                if exec_metadata:
+                    metadata["ai_metadata"] = exec_metadata
 
-                # Extract AI metadata if present (only for CachedExecutor)
-                ai_metadata = updated_context.pop("_ai_metadata", None)
-                if ai_metadata:
-                    logger.info(f"✅ AI metadata extracted and will be saved to chain_of_work")
-                    metadata["ai_metadata"] = ai_metadata
-                else:
-                    logger.info(f"⚠️  No AI metadata found in updated_context (executor: {node.executor})")
-
-                # E2BExecutor already extracted context_updates from the JSON output
-                # No need to check for wrapper again - just update directly
+                # Update context with functional result (clean, no metadata)
                 logger.info(f"🔍 DEBUG before context.update() for node {node.id}:")
-                logger.info(f"   updated_context keys: {list(updated_context.keys())}")
-                logger.info(f"   updated_context content: {updated_context}")
+                logger.info(f"   result keys: {list(result.keys())}")
                 logger.info(f"   context BEFORE update: {list(context.get_all().keys())}")
 
-                # 🔥 SIEMPRE actualizamos el contexto con los datos del nodo
-                # Cuando es CachedExecutor, el orchestrator ya actualizó el ContextManager interno,
-                # pero aún necesitamos mergear updated_context por si hay datos adicionales
-                context.update(updated_context)
+                context.update(result)
 
                 logger.info(f"   context AFTER update: {list(context.get_all().keys())}")
                 logger.info(f"   Did context gain new keys? {set(context.get_all().keys()) - set(input_context.keys())}")
 
-                # Store actual executed code (not prompt)
-                # If AI generated code, use that. Otherwise use the prompt/code as-is
-                if ai_metadata and "generated_code" in ai_metadata:
-                    metadata["code_executed"] = ai_metadata["generated_code"]
+                # Store executed code
+                if exec_metadata and "ai_metadata" in exec_metadata and "generated_code" in exec_metadata["ai_metadata"]:
+                    metadata["code_executed"] = exec_metadata["ai_metadata"]["generated_code"]
                 else:
                     metadata["code_executed"] = code_or_prompt
 
@@ -381,43 +352,26 @@ class GraphEngine:
                             f"DecisionNode {node.id} must have 'code' attribute"
                         )
 
-                # 🔥 NUEVO: Manejo diferente según executor type
-                if node.executor == "cached":
-                    # CachedExecutor retorna tupla (updated_context, updated_context_manager)
-                    updated_context, updated_context_manager = await executor.execute(
-                        code=code_or_prompt,
-                        context=context.get_all(),
-                        timeout=node.timeout,
-                        workflow=workflow_definition,
-                        node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)},
-                        context_manager=context  # 🔥 Pasar ContextManager
-                    )
-                    # Reemplazar context con el actualizado
-                    context = updated_context_manager
-                else:
-                    # E2BExecutor retorna solo Dict
-                    updated_context = await executor.execute(
-                        code=code_or_prompt,
-                        context=context.get_all(),
-                        timeout=node.timeout,
-                        workflow=workflow_definition,
-                        node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)}
-                    )
+                # Execute code/prompt - all executors now return (result, metadata)
+                result, exec_metadata = await executor.execute(
+                    code=code_or_prompt,
+                    context=context.get_all(),
+                    context_manager=context,  # Pass by reference (CachedExecutor updates in-place)
+                    timeout=node.timeout,
+                    workflow=workflow_definition,
+                    node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)}
+                )
 
-                # Extract AI metadata if present (only for CachedExecutor)
-                ai_metadata = updated_context.pop("_ai_metadata", None)
-                if ai_metadata:
-                    metadata["ai_metadata"] = ai_metadata
+                # Store metadata (includes cache + AI + execution)
+                if exec_metadata:
+                    metadata["ai_metadata"] = exec_metadata
 
-                # E2BExecutor already extracted context_updates from the JSON output
-                # No need to check for wrapper again - just update directly
-                # 🔥 SIEMPRE actualizamos el contexto con los datos del nodo
-                context.update(updated_context)
+                # Update context with functional result (clean, no metadata)
+                context.update(result)
 
-                # Store actual executed code (not prompt)
-                # If AI generated code, use that. Otherwise use the prompt/code as-is
-                if ai_metadata and "generated_code" in ai_metadata:
-                    metadata["code_executed"] = ai_metadata["generated_code"]
+                # Store executed code
+                if exec_metadata and "ai_metadata" in exec_metadata and "generated_code" in exec_metadata["ai_metadata"]:
+                    metadata["code_executed"] = exec_metadata["ai_metadata"]["generated_code"]
                 else:
                     metadata["code_executed"] = code_or_prompt
 

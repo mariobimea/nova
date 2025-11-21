@@ -37,7 +37,7 @@ async def test():
         print(f"\n📝 Prompt: {prompt}")
         print(f"\n⏳ Executing...")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=prompt,
             context={},
             timeout=30

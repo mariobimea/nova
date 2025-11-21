@@ -17,8 +17,11 @@ Executors handle:
 import json
 import os
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING
 import logging
+
+if TYPE_CHECKING:
+    from .context_manager import ContextManager
 
 from .exceptions import (
     ExecutorError,
@@ -41,8 +44,8 @@ class ExecutorStrategy(ABC):
     Abstract interface for all execution strategies.
 
     All executors must implement the execute() method which:
-    - Takes code, context, and timeout
-    - Returns updated context after execution
+    - Takes code, context, and optional context_manager
+    - Returns tuple of (result, metadata)
     - Raises ExecutorError on failure
     """
 
@@ -51,18 +54,27 @@ class ExecutorStrategy(ABC):
         self,
         code: str,
         context: Dict[str, Any],
-        timeout: int
-    ) -> Dict[str, Any]:
+        context_manager: Optional['ContextManager'] = None,
+        timeout: Optional[int] = None,
+        **kwargs
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Execute code with given context.
 
         Args:
-            code: Python code to execute
-            context: Current workflow context (will be injected)
+            code: Python code or prompt to execute
+            context: Execution context (dict)
+            context_manager: Optional ContextManager (CachedExecutor uses this)
             timeout: Execution timeout in seconds
+            **kwargs: Additional executor-specific parameters
 
         Returns:
-            Updated context after execution
+            Tuple containing:
+            - result (Dict): Functional output to merge into next node's context
+            - metadata (Dict): Execution metadata (cache, AI, timing, stdout/stderr)
+
+        Side effects:
+            - CachedExecutor may modify context_manager in-place
 
         Raises:
             ExecutorError: If execution fails
@@ -196,11 +208,12 @@ class CachedExecutor(ExecutorStrategy):
         self,
         code: str,  # In CachedExecutor, this is the PROMPT (natural language)
         context: Dict[str, Any],
-        timeout: int,
+        context_manager: Optional['ContextManager'] = None,
+        timeout: Optional[int] = None,
         workflow: Optional[Dict[str, Any]] = None,
         node: Optional[Dict[str, Any]] = None,
-        context_manager: Optional[Any] = None  # 🔥 NUEVO: Recibir ContextManager
-    ) -> tuple[Dict[str, Any], Optional[Any]]:
+        **kwargs
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Execute workflow node using Multi-Agent Architecture.
 
@@ -216,18 +229,25 @@ class CachedExecutor(ExecutorStrategy):
 
         Args:
             code: Natural language prompt/task description (NOT Python code)
-            context: Current workflow context
+            context: Current workflow context (dict)
+            context_manager: Optional ContextManager to maintain analysis history between nodes
             timeout: Execution timeout in seconds (for E2B)
             workflow: Optional workflow dictionary (unused in multi-agent)
             node: Optional node dictionary (unused in multi-agent)
-            context_manager: Optional ContextManager to maintain analysis history between nodes
+            **kwargs: Additional executor-specific parameters
 
         Returns:
-            Tuple of (updated_context, context_manager):
-            - updated_context: Dict with context updates and AI metadata:
+            Tuple containing:
+            - result (Dict): Functional output (clean, no metadata)
+            - metadata (Dict): Execution metadata:
               {
-                  ...context updates from execution...,
-                  "_ai_metadata": {
+                  "cache_metadata": {
+                      "cache_hit": bool,
+                      "cache_key": str,
+                      "times_reused": int,
+                      "cost_saved_usd": float
+                  },
+                  "ai_metadata": {
                       "input_analysis": {...},
                       "data_analysis": {...},
                       "code_generation": {...},
@@ -236,9 +256,16 @@ class CachedExecutor(ExecutorStrategy):
                       "attempts": 1-3,
                       "errors": [...],
                       "timings": {...}
+                  },
+                  "execution_metadata": {
+                      "stdout": str,
+                      "stderr": str,
+                      "exit_code": int
                   }
               }
-            - context_manager: Updated ContextManager with new analysis history
+
+        Side effects:
+            - Modifies context_manager in-place with functional result
 
         Raises:
             ExecutorError: If execution fails after max retries
@@ -250,10 +277,10 @@ class CachedExecutor(ExecutorStrategy):
         logger.info(f"   Context keys: {list(context.keys())}")
         logger.info(f"   Timeout: {timeout}s")
 
-        # 🔥 NUEVO: Crear ContextManager si no se proporciona
+        # Crear ContextManager si no se proporciona
         if context_manager is None:
-            from .context import ContextManager
-            context_manager = ContextManager(context)
+            from .context_manager import ContextManager
+            context_manager = ContextManager(initial_context=context)
             logger.info(f"   Created new ContextManager")
         else:
             logger.info(f"   Using provided ContextManager with {len(context_manager.get_summary().analysis_history)} previous analyses")
@@ -310,19 +337,37 @@ class CachedExecutor(ExecutorStrategy):
                             execution_time_ms=execution_time_ms
                         )
 
-                        # Add cache metadata to _ai_metadata (so it gets saved to DB)
-                        if '_ai_metadata' not in result:
-                            result['_ai_metadata'] = {}
-                        result['_ai_metadata']['_cache_metadata'] = {
-                            'cache_hit': True,
-                            'cache_key': cached_entry.cache_key[:16] + "...",
-                            'times_reused': cached_entry.times_reused + 1,
-                            'original_cost_usd': float(cached_entry.cost_usd) if cached_entry.cost_usd else 0.0,
-                            'cost_saved_usd': float(cached_entry.cost_usd) if cached_entry.cost_usd else 0.0
+                        # Crear metadata separado
+                        metadata = {
+                            'cache_metadata': {
+                                'cache_hit': True,
+                                'cache_key': cached_entry.cache_key[:16] + "...",
+                                'times_reused': cached_entry.times_reused + 1,
+                                'original_cost_usd': float(cached_entry.cost_usd) if cached_entry.cost_usd else 0.0,
+                                'cost_saved_usd': float(cached_entry.cost_usd) if cached_entry.cost_usd else 0.0
+                            },
+                            'ai_metadata': {
+                                'model': cached_entry.model,
+                                'generated_code': cached_entry.generated_code,
+                                'original_prompt': cached_entry.original_prompt,
+                                'tokens_used': cached_entry.tokens_used or 0,
+                                'cost_usd': float(cached_entry.cost_usd) if cached_entry.cost_usd else 0.0
+                            },
+                            'execution_metadata': {
+                                'stdout': result.get('_stdout', ''),
+                                'stderr': result.get('_stderr', ''),
+                                'exit_code': result.get('_exit_code', 0)
+                            }
                         }
 
+                        # Limpiar result de campos internos
+                        clean_result = {k: v for k, v in result.items() if not k.startswith('_')}
+
+                        # Actualizar context_manager con resultado funcional limpio
+                        context_manager.update(clean_result)
+
                         logger.info(f"✅ Cached code executed successfully (saved ${cached_entry.cost_usd:.4f})")
-                        return result, context_manager  # 🔥 NUEVO: Retornar tupla
+                        return clean_result, metadata
 
                     except Exception as e:
                         # Cached code failed - fallback to AI generation
@@ -347,21 +392,34 @@ class CachedExecutor(ExecutorStrategy):
         # CACHE MISS or NO CACHE - Generate with AI
         # ═══════════════════════════════════════════════════════
         try:
-            # 🔥 NUEVO: Pasar context_manager al orchestrator
+            # Pasar context_manager al orchestrator
             result, updated_context_manager = await self.orchestrator.execute_workflow(
                 task=prompt_task,
                 context=context,
                 timeout=timeout,
                 node_type=node_type,
                 node_id=node_id,
-                context_manager=context_manager  # 🔥 NUEVO: Pasar context_manager
+                context_manager=context_manager
             )
+
+            # ═══════════════════════════════════════════════════════
+            # SEPARAR METADATA DEL RESULTADO
+            # ═══════════════════════════════════════════════════════
+            ai_metadata = result.get('_ai_metadata', {})
+            execution_failed = ai_metadata.get('status') == 'failed' or ai_metadata.get('final_error')
+
+            # Extraer stdout/stderr para execution_metadata
+            stdout = result.get('_stdout', '')
+            stderr = result.get('_stderr', '')
+            exit_code = result.get('_exit_code', 0)
+
+            # Limpiar result de campos internos
+            clean_result = {k: v for k, v in result.items() if not k.startswith('_')}
 
             # ═══════════════════════════════════════════════════════
             # SAVE TO CACHE (if enabled and execution successful)
             # ═══════════════════════════════════════════════════════
-            ai_metadata = result.get('_ai_metadata', {})
-            execution_failed = ai_metadata.get('status') == 'failed' or ai_metadata.get('final_error')
+            cache_metadata = {}
 
             if self.cache_manager and cache_key_inicial and not execution_failed:
                 try:
@@ -393,17 +451,11 @@ class CachedExecutor(ExecutorStrategy):
                             node_id=node_id
                         )
 
-                        # Add cache metadata to _ai_metadata (so it gets saved to DB)
-                        if '_ai_metadata' not in result:
-                            result['_ai_metadata'] = {}
-                        result['_ai_metadata']['_cache_metadata'] = {
+                        cache_metadata = {
                             'cache_hit': False,
                             'cache_key': cache_key_inicial[:16] + "...",
                             'saved_for_future': True
                         }
-
-                        # Also add to ai_metadata variable for consistency
-                        ai_metadata['_cache_metadata'] = result['_ai_metadata']['_cache_metadata']
 
                         logger.info(f"💾 Code saved to cache for future reuse (code length: {len(generated_code)} chars)")
                     else:
@@ -418,8 +470,28 @@ class CachedExecutor(ExecutorStrategy):
             elif self.cache_manager and execution_failed:
                 logger.info(f"🚫 Not caching (execution failed)")
 
+            # ═══════════════════════════════════════════════════════
+            # BUILD METADATA DICT
+            # ═══════════════════════════════════════════════════════
+            metadata = {
+                'ai_metadata': ai_metadata,
+                'execution_metadata': {
+                    'stdout': stdout,
+                    'stderr': stderr,
+                    'exit_code': exit_code
+                }
+            }
+
+            if cache_metadata:
+                metadata['cache_metadata'] = cache_metadata
+
+            # ═══════════════════════════════════════════════════════
+            # UPDATE CONTEXT MANAGER
+            # ═══════════════════════════════════════════════════════
+            context_manager.update(clean_result)
+
             logger.info(f"✅ Multi-Agent execution completed successfully")
-            return result, updated_context_manager  # 🔥 NUEVO: Retornar tupla
+            return clean_result, metadata
 
         except Exception as e:
             logger.error(f"❌ Multi-Agent execution failed: {e}")
@@ -437,10 +509,12 @@ class AIExecutor(ExecutorStrategy):
         self,
         code: str,
         context: Dict[str, Any],
-        timeout: int,
+        context_manager: Optional['ContextManager'] = None,
+        timeout: Optional[int] = None,
         workflow: Optional[Dict[str, Any]] = None,
-        node: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        node: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         raise NotImplementedError("AIExecutor is Phase 2 feature")
 
 
@@ -558,22 +632,31 @@ print(json.dumps(context, ensure_ascii=True))
         self,
         code: str,
         context: Dict[str, Any],
-        timeout: int,
+        context_manager: Optional['ContextManager'] = None,
+        timeout: Optional[int] = None,
         workflow: Optional[Dict[str, Any]] = None,
-        node: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        node: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
         Execute code in E2B cloud sandbox with circuit breaker protection.
 
         Args:
             code: Python code to execute
-            context: Current workflow context
+            context: Current workflow context (dict)
+            context_manager: Optional ContextManager (unused by E2BExecutor)
             timeout: Execution timeout in seconds
             workflow: Optional workflow definition (unused by E2BExecutor)
             node: Optional node definition (unused by E2BExecutor)
+            **kwargs: Additional executor-specific parameters
 
         Returns:
-            Updated context after execution
+            Tuple containing:
+            - result (Dict): Functional output (clean, no metadata)
+            - metadata (Dict): Execution metadata (stdout, stderr, exit_code)
+
+        Side effects:
+            - If context_manager provided, updates it with functional result
 
         Raises:
             E2BConnectionError: If circuit breaker is open or E2B unreachable
@@ -581,6 +664,9 @@ print(json.dumps(context, ensure_ascii=True))
             CodeExecutionError: If user code has syntax/runtime errors
             E2BSandboxError: If sandbox crashes or other E2B error
         """
+        # Default timeout if not provided
+        if timeout is None:
+            timeout = 30
         # Check circuit breaker BEFORE attempting execution
         if e2b_circuit_breaker.is_open():
             error_msg = (
@@ -604,12 +690,26 @@ print(json.dumps(context, ensure_ascii=True))
         loop = asyncio.get_event_loop()
 
         try:
-            result = await loop.run_in_executor(None, self._execute_sync, full_code, timeout)
+            # _execute_sync now returns (result, stdout, stderr, exit_code)
+            result, stdout, stderr, exit_code = await loop.run_in_executor(None, self._execute_sync, full_code, timeout)
 
             # Record success in circuit breaker
             e2b_circuit_breaker.record_success()
 
-            return result
+            # Build metadata
+            metadata = {
+                'execution_metadata': {
+                    'stdout': stdout,
+                    'stderr': stderr,
+                    'exit_code': exit_code
+                }
+            }
+
+            # Update context_manager if provided
+            if context_manager:
+                context_manager.update(result)
+
+            return result, metadata
 
         except (E2BSandboxError, E2BTimeoutError, E2BConnectionError, CodeExecutionError):
             # These are already classified errors, just record failure
@@ -630,7 +730,7 @@ print(json.dumps(context, ensure_ascii=True))
             else:
                 raise E2BSandboxError(f"E2B unexpected error: {e}")
 
-    def _execute_sync(self, full_code: str, timeout: int) -> Dict[str, Any]:
+    def _execute_sync(self, full_code: str, timeout: int) -> Tuple[Dict[str, Any], str, str, int]:
         """
         Synchronous execution wrapper for E2B v2.x SDK.
 
@@ -639,7 +739,11 @@ print(json.dumps(context, ensure_ascii=True))
             timeout: Execution timeout in seconds
 
         Returns:
-            Updated context dictionary
+            Tuple containing:
+            - result (Dict): Updated context dictionary
+            - stdout (str): Standard output from execution
+            - stderr (str): Standard error from execution
+            - exit_code (int): Exit code from execution
 
         Raises:
             E2BConnectionError: Connection/API errors
@@ -780,7 +884,8 @@ print(json.dumps(context, ensure_ascii=True))
                 # Kill sandbox
                 sandbox.kill()
 
-                return updated_context
+                # Return tuple: (result, stdout, stderr, exit_code)
+                return updated_context, stdout_output, execution.stderr or "", execution.exit_code
 
             except TimeoutError as e:
                 # Sandbox creation or execution timeout

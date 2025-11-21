@@ -59,7 +59,7 @@ async def test_openai_generation():
         prompt = "Calculate the sum of numbers from 1 to 10"
         print(f"Prompt: {prompt}")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=prompt,
             context={},
             timeout=30
@@ -102,7 +102,7 @@ async def test_openai_generation():
         print(f"Prompt: {prompt}")
         print(f"Context: {context}")
 
-        result = await executor.execute(
+        result, metadata = await executor.execute(
             code=prompt,
             context=context,
             timeout=30
