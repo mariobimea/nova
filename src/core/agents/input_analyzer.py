@@ -6,10 +6,10 @@ Responsabilidad:
     Ahora recibe Context Summary para tomar mejores decisiones.
 
 Características:
-    - Modelo: gpt-4o-mini (decisión simple, rápido)
+    - Modelo: gpt-4o (más confiable, evita errores de padding)
     - Ejecuciones: UNA SOLA VEZ (no se repite en retries)
     - Tool calling: NO
-    - Costo: ~$0.0005 por ejecución
+    - Costo: ~$0.0025 por ejecución
     - Context-aware: Ve qué ya se analizó para evitar redundancia
 """
 
@@ -29,7 +29,7 @@ class InputAnalyzerAgent(BaseAgent):
     def __init__(self, openai_client: AsyncOpenAI):
         super().__init__("InputAnalyzer")
         self.client = openai_client
-        self.model = "gpt-4o-mini"
+        self.model = "gpt-4o"
 
     async def execute(
         self,
@@ -102,7 +102,8 @@ class InputAnalyzerAgent(BaseAgent):
             usage = response.usage
             tokens_input = usage.prompt_tokens if usage else 0
             tokens_output = usage.completion_tokens if usage else 0
-            cost_usd = (tokens_input * 0.150 / 1_000_000) + (tokens_output * 0.600 / 1_000_000)
+            # GPT-4o pricing: $2.50 per 1M input tokens, $10.00 per 1M output tokens
+            cost_usd = (tokens_input * 2.50 / 1_000_000) + (tokens_output * 10.00 / 1_000_000)
 
             result["model"] = self.model
             result["tokens"] = {
