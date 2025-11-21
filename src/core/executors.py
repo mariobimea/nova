@@ -310,8 +310,10 @@ class CachedExecutor(ExecutorStrategy):
                             execution_time_ms=execution_time_ms
                         )
 
-                        # Add cache metadata to result
-                        result['_cache_metadata'] = {
+                        # Add cache metadata to _ai_metadata (so it gets saved to DB)
+                        if '_ai_metadata' not in result:
+                            result['_ai_metadata'] = {}
+                        result['_ai_metadata']['_cache_metadata'] = {
                             'cache_hit': True,
                             'cache_key': cached_entry.cache_key[:16] + "...",
                             'times_reused': cached_entry.times_reused + 1,
@@ -391,12 +393,17 @@ class CachedExecutor(ExecutorStrategy):
                             node_id=node_id
                         )
 
-                        # Add cache metadata to result
-                        result['_cache_metadata'] = {
+                        # Add cache metadata to _ai_metadata (so it gets saved to DB)
+                        if '_ai_metadata' not in result:
+                            result['_ai_metadata'] = {}
+                        result['_ai_metadata']['_cache_metadata'] = {
                             'cache_hit': False,
                             'cache_key': cache_key_inicial[:16] + "...",
                             'saved_for_future': True
                         }
+
+                        # Also add to ai_metadata variable for consistency
+                        ai_metadata['_cache_metadata'] = result['_ai_metadata']['_cache_metadata']
 
                         logger.info(f"💾 Code saved to cache for future reuse (code length: {len(generated_code)} chars)")
                     else:
