@@ -340,9 +340,17 @@ class GraphEngine:
                 logger.info(f"   result keys: {list(result.keys())}")
                 logger.info(f"   metadata keys: {list(exec_metadata.keys())}")
 
-                # Store metadata (includes cache + AI + execution)
+                # Store metadata - merge all metadata fields
                 if exec_metadata:
-                    metadata["ai_metadata"] = exec_metadata
+                    # exec_metadata structure: {cache_metadata, ai_metadata, execution_metadata}
+                    # We want to store it all in metadata["ai_metadata"] but flatten it
+                    metadata["ai_metadata"] = exec_metadata.get("ai_metadata", {})
+
+                    # Also store cache and execution metadata at top level
+                    if "cache_metadata" in exec_metadata:
+                        metadata["ai_metadata"]["_cache_metadata"] = exec_metadata["cache_metadata"]
+                    if "execution_metadata" in exec_metadata:
+                        metadata["ai_metadata"]["_execution_metadata"] = exec_metadata["execution_metadata"]
 
                 # Update context with functional result (clean, no metadata)
                 logger.info(f"🔍 DEBUG before context.update() for node {node.id}:")
@@ -394,9 +402,17 @@ class GraphEngine:
                     node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)}
                 )
 
-                # Store metadata (includes cache + AI + execution)
+                # Store metadata - merge all metadata fields
                 if exec_metadata:
-                    metadata["ai_metadata"] = exec_metadata
+                    # exec_metadata structure: {cache_metadata, ai_metadata, execution_metadata}
+                    # We want to store it all in metadata["ai_metadata"] but flatten it
+                    metadata["ai_metadata"] = exec_metadata.get("ai_metadata", {})
+
+                    # Also store cache and execution metadata at top level
+                    if "cache_metadata" in exec_metadata:
+                        metadata["ai_metadata"]["_cache_metadata"] = exec_metadata["cache_metadata"]
+                    if "execution_metadata" in exec_metadata:
+                        metadata["ai_metadata"]["_execution_metadata"] = exec_metadata["execution_metadata"]
 
                 # Update context with functional result (clean, no metadata)
                 context.update(result)
