@@ -276,7 +276,7 @@ class CachedExecutor(ExecutorStrategy):
                         import time
                         start_time = time.time()
 
-                        result = await self.e2b.execute(
+                        result = await self.e2b.execute_code(
                             code=cached_entry.generated_code,
                             context=context,
                             timeout=timeout
