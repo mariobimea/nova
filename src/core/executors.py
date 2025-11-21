@@ -273,11 +273,19 @@ class CachedExecutor(ExecutorStrategy):
             workflow_id = workflow.get("id")
 
         # ═══════════════════════════════════════════════════════
+        # 🔑 CALCULAR CACHE KEY AL INICIO (antes de cualquier modificación)
+        # ═══════════════════════════════════════════════════════
+        cache_key_inicial = None
+        if self.cache_manager:
+            cache_key_inicial = generate_cache_key(prompt_task, context)
+            logger.info(f"🔑 Cache key inicial: {cache_key_inicial[:16]}...")
+
+        # ═══════════════════════════════════════════════════════
         # CACHE LOOKUP (if cache enabled)
         # ═══════════════════════════════════════════════════════
-        if self.cache_manager:
+        if self.cache_manager and cache_key_inicial:
             try:
-                cached_entry = await self.cache_manager.lookup(prompt_task, context)
+                cached_entry = await self.cache_manager.lookup_by_key(cache_key_inicial)
 
                 if cached_entry:
                     # ✅ CACHE HIT - Execute cached code directly
@@ -353,7 +361,7 @@ class CachedExecutor(ExecutorStrategy):
             ai_metadata = result.get('_ai_metadata', {})
             execution_failed = ai_metadata.get('status') == 'failed' or ai_metadata.get('final_error')
 
-            if self.cache_manager and not execution_failed:
+            if self.cache_manager and cache_key_inicial and not execution_failed:
                 try:
                     # Extract metadata from orchestrator result
                     code_gen_meta = ai_metadata.get('code_generation', {})
@@ -371,11 +379,12 @@ class CachedExecutor(ExecutorStrategy):
                         # Add generated_code to ai_metadata for engine to use in Chain of Work
                         ai_metadata['generated_code'] = generated_code
 
-                        await self.cache_manager.save(
-                            prompt=prompt_task,
-                            context=context,
+                        # 🔑 GUARDAR con el MISMO cache_key_inicial (calculado al inicio)
+                        await self.cache_manager.save_with_key(
+                            cache_key=cache_key_inicial,
                             generated_code=generated_code,
                             model=model,
+                            original_prompt=prompt_task,
                             tokens_used=tokens_used,
                             cost_usd=cost_usd,
                             workflow_id=workflow_id,
@@ -385,7 +394,7 @@ class CachedExecutor(ExecutorStrategy):
                         # Add cache metadata to result
                         result['_cache_metadata'] = {
                             'cache_hit': False,
-                            'cache_key': generate_cache_key(prompt_task, context)[:16] + "...",
+                            'cache_key': cache_key_inicial[:16] + "...",
                             'saved_for_future': True
                         }
 
