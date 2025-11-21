@@ -182,8 +182,9 @@ class MultiAgentOrchestrator:
         context: Dict,
         timeout: int = 60,
         node_type: Optional[str] = None,
-        node_id: Optional[str] = None
-    ) -> Dict:
+        node_id: Optional[str] = None,
+        context_manager: Optional[ContextManager] = None  # 🔥 NUEVO: Recibir ContextManager
+    ) -> tuple[Dict, ContextManager]:
         """
         Ejecuta el workflow completo con todos los agentes.
 
@@ -193,12 +194,15 @@ class MultiAgentOrchestrator:
             timeout: Timeout para ejecución en E2B
             node_type: Tipo de nodo ("action", "decision", etc.) - opcional
             node_id: ID del nodo (usado para DecisionNodes) - opcional
+            context_manager: Optional ContextManager con historial de análisis previos
 
         Returns:
-            {
+            Tuple of (updated_context, context_manager):
+            - updated_context: {
                 ...context_actualizado,
                 "_ai_metadata": {...execution_state}
             }
+            - context_manager: ContextManager actualizado con nuevo historial
         """
         # 1. Inicializar estados
         execution_state = ExecutionState()
@@ -207,8 +211,14 @@ class MultiAgentOrchestrator:
             current=context.copy()
         )
 
-        # 🔥 NUEVO: Crear ContextManager para gestionar Context Summary
-        context_manager = ContextManager(context)
+        # 🔥 NUEVO: Usar ContextManager proporcionado o crear uno nuevo
+        if context_manager is None:
+            context_manager = ContextManager(context)
+            self.logger.info(f"   Orchestrator created new ContextManager")
+        else:
+            # Actualizar el contexto del ContextManager con el contexto actual
+            context_manager.update(context)
+            self.logger.info(f"   Orchestrator using provided ContextManager with {len(context_manager.get_summary().analysis_history)} previous analyses")
 
         # 🔥 NUEVO: Lista para registrar todos los steps
         steps_to_persist: List[Dict] = []
@@ -805,12 +815,12 @@ class MultiAgentOrchestrator:
                 f"✅ Workflow completado. Total time: {execution_state.get_total_time_ms():.2f}ms, "
                 f"Steps registrados: {len(steps_to_persist)}"
             )
-            return result
+            return result, context_manager  # 🔥 NUEVO: Retornar tupla
 
         except Exception as e:
             self.logger.error(f"💥 Workflow falló: {str(e)}")
             # Retornar contexto original + metadata del error + STEPS
-            return {
+            error_result = {
                 **context_state.initial,
                 "_ai_metadata": {
                     **execution_state.to_dict(),
@@ -819,3 +829,4 @@ class MultiAgentOrchestrator:
                     "status": "failed"
                 }
             }
+            return error_result, context_manager  # 🔥 NUEVO: Retornar tupla

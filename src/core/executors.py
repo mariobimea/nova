@@ -198,8 +198,9 @@ class CachedExecutor(ExecutorStrategy):
         context: Dict[str, Any],
         timeout: int,
         workflow: Optional[Dict[str, Any]] = None,
-        node: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        node: Optional[Dict[str, Any]] = None,
+        context_manager: Optional[Any] = None  # 🔥 NUEVO: Recibir ContextManager
+    ) -> tuple[Dict[str, Any], Optional[Any]]:
         """
         Execute workflow node using Multi-Agent Architecture.
 
@@ -219,22 +220,25 @@ class CachedExecutor(ExecutorStrategy):
             timeout: Execution timeout in seconds (for E2B)
             workflow: Optional workflow dictionary (unused in multi-agent)
             node: Optional node dictionary (unused in multi-agent)
+            context_manager: Optional ContextManager to maintain analysis history between nodes
 
         Returns:
-            Updated context with AI metadata from all agents:
-            {
-                ...context updates from execution...,
-                "_ai_metadata": {
-                    "input_analysis": {...},
-                    "data_analysis": {...},
-                    "code_generation": {...},
-                    "code_validation": {...},
-                    "output_validation": {...},
-                    "attempts": 1-3,
-                    "errors": [...],
-                    "timings": {...}
-                }
-            }
+            Tuple of (updated_context, context_manager):
+            - updated_context: Dict with context updates and AI metadata:
+              {
+                  ...context updates from execution...,
+                  "_ai_metadata": {
+                      "input_analysis": {...},
+                      "data_analysis": {...},
+                      "code_generation": {...},
+                      "code_validation": {...},
+                      "output_validation": {...},
+                      "attempts": 1-3,
+                      "errors": [...],
+                      "timings": {...}
+                  }
+              }
+            - context_manager: Updated ContextManager with new analysis history
 
         Raises:
             ExecutorError: If execution fails after max retries
@@ -245,6 +249,14 @@ class CachedExecutor(ExecutorStrategy):
         logger.info(f"   Task: {prompt_task[:100]}...")
         logger.info(f"   Context keys: {list(context.keys())}")
         logger.info(f"   Timeout: {timeout}s")
+
+        # 🔥 NUEVO: Crear ContextManager si no se proporciona
+        if context_manager is None:
+            from .context import ContextManager
+            context_manager = ContextManager(context)
+            logger.info(f"   Created new ContextManager")
+        else:
+            logger.info(f"   Using provided ContextManager with {len(context_manager.get_summary().analysis_history)} previous analyses")
 
         # Extract node_type, node_id, workflow_id
         node_type = None
@@ -300,7 +312,7 @@ class CachedExecutor(ExecutorStrategy):
                         }
 
                         logger.info(f"✅ Cached code executed successfully (saved ${cached_entry.cost_usd:.4f})")
-                        return result
+                        return result, context_manager  # 🔥 NUEVO: Retornar tupla
 
                     except Exception as e:
                         # Cached code failed - fallback to AI generation
@@ -325,12 +337,14 @@ class CachedExecutor(ExecutorStrategy):
         # CACHE MISS or NO CACHE - Generate with AI
         # ═══════════════════════════════════════════════════════
         try:
-            result = await self.orchestrator.execute_workflow(
+            # 🔥 NUEVO: Pasar context_manager al orchestrator
+            result, updated_context_manager = await self.orchestrator.execute_workflow(
                 task=prompt_task,
                 context=context,
                 timeout=timeout,
                 node_type=node_type,
-                node_id=node_id
+                node_id=node_id,
+                context_manager=context_manager  # 🔥 NUEVO: Pasar context_manager
             )
 
             # ═══════════════════════════════════════════════════════
@@ -389,7 +403,7 @@ class CachedExecutor(ExecutorStrategy):
                 logger.info(f"🚫 Not caching (execution failed)")
 
             logger.info(f"✅ Multi-Agent execution completed successfully")
-            return result
+            return result, updated_context_manager  # 🔥 NUEVO: Retornar tupla
 
         except Exception as e:
             logger.error(f"❌ Multi-Agent execution failed: {e}")

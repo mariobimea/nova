@@ -292,13 +292,26 @@ class GraphEngine:
                             f"ActionNode {node.id} must have 'code' attribute"
                         )
 
-                updated_context = await executor.execute(
-                    code=code_or_prompt,  # This is either code or prompt depending on executor
-                    context=context.get_all(),
-                    timeout=node.timeout,
-                    workflow=workflow_definition,  # Pass workflow for model resolution
-                    node={"id": node.id, "type": "action", "model": getattr(node, "model", None)}  # Pass node type for prompt customization
-                )
+                # 🔥 NUEVO: Manejo diferente según executor type
+                if node.executor == "cached":
+                    # CachedExecutor retorna tupla (updated_context, context_manager)
+                    updated_context, context = await executor.execute(
+                        code=code_or_prompt,
+                        context=context.get_all(),
+                        timeout=node.timeout,
+                        workflow=workflow_definition,
+                        node={"id": node.id, "type": "action", "model": getattr(node, "model", None)},
+                        context_manager=context  # 🔥 Pasar ContextManager
+                    )
+                else:
+                    # E2BExecutor retorna solo Dict
+                    updated_context = await executor.execute(
+                        code=code_or_prompt,
+                        context=context.get_all(),
+                        timeout=node.timeout,
+                        workflow=workflow_definition,
+                        node={"id": node.id, "type": "action", "model": getattr(node, "model", None)}
+                    )
 
                 # DEBUG: Log what executor returned
                 logger.info(f"🔍 DEBUG after executor.execute() for node {node.id}:")
@@ -327,7 +340,10 @@ class GraphEngine:
                 logger.info(f"   updated_context content: {updated_context}")
                 logger.info(f"   context BEFORE update: {list(context.get_all().keys())}")
 
-                context.update(updated_context)
+                # 🔥 NOTA: Si usamos CachedExecutor, context ya fue actualizado arriba
+                # Si usamos E2BExecutor, debemos actualizar manualmente
+                if node.executor != "cached":
+                    context.update(updated_context)
 
                 logger.info(f"   context AFTER update: {list(context.get_all().keys())}")
                 logger.info(f"   Did context gain new keys? {set(context.get_all().keys()) - set(input_context.keys())}")
@@ -363,13 +379,26 @@ class GraphEngine:
                             f"DecisionNode {node.id} must have 'code' attribute"
                         )
 
-                updated_context = await executor.execute(
-                    code=code_or_prompt,  # This is either code or prompt depending on executor
-                    context=context.get_all(),
-                    timeout=node.timeout,
-                    workflow=workflow_definition,  # Pass workflow for model resolution
-                    node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)}  # Pass node type for prompt customization
-                )
+                # 🔥 NUEVO: Manejo diferente según executor type
+                if node.executor == "cached":
+                    # CachedExecutor retorna tupla (updated_context, context_manager)
+                    updated_context, context = await executor.execute(
+                        code=code_or_prompt,
+                        context=context.get_all(),
+                        timeout=node.timeout,
+                        workflow=workflow_definition,
+                        node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)},
+                        context_manager=context  # 🔥 Pasar ContextManager
+                    )
+                else:
+                    # E2BExecutor retorna solo Dict
+                    updated_context = await executor.execute(
+                        code=code_or_prompt,
+                        context=context.get_all(),
+                        timeout=node.timeout,
+                        workflow=workflow_definition,
+                        node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)}
+                    )
 
                 # Extract AI metadata if present (only for CachedExecutor)
                 ai_metadata = updated_context.pop("_ai_metadata", None)
@@ -378,7 +407,10 @@ class GraphEngine:
 
                 # E2BExecutor already extracted context_updates from the JSON output
                 # No need to check for wrapper again - just update directly
-                context.update(updated_context)
+                # 🔥 NOTA: Si usamos CachedExecutor, context ya fue actualizado arriba
+                # Si usamos E2BExecutor, debemos actualizar manualmente
+                if node.executor != "cached":
+                    context.update(updated_context)
 
                 # Store actual executed code (not prompt)
                 # If AI generated code, use that. Otherwise use the prompt/code as-is
