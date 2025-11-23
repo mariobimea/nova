@@ -64,6 +64,7 @@ def make_json_serializable(obj):
 from .nodes import create_node_from_dict, NodeType, StartNode, EndNode, ActionNode, DecisionNode
 from .executors import get_executor
 from .context import ContextManager
+from .schema_extractor import build_cache_context
 from .exceptions import (
     GraphValidationError,
     GraphExecutionError,
@@ -543,6 +544,12 @@ class GraphEngine:
 
         # Initialize context
         context = ContextManager(initial_context or {})
+
+        # Build cache context for semantic code matching
+        # This extracts a compact schema representation used by CachedExecutor
+        cache_context = build_cache_context(context.get_all())
+        context.set("_cache_context", cache_context)
+        logger.info(f"Built cache context with {len(cache_context.get('input_schema', {}))} schema fields")
 
         # Find start node
         start_node = next(n for n in nodes.values() if isinstance(n, StartNode))

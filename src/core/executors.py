@@ -35,6 +35,8 @@ from .context_validator import is_json_serializable, get_context_stats
 from .output_validator import auto_validate_output
 from .cache_manager import CodeCacheManager
 from .cache_utils import generate_cache_key
+from .rag_client import get_code_cache_client
+from .schema_extractor import extract_compact_schema
 
 logger = logging.getLogger(__name__)
 
@@ -198,11 +200,23 @@ class CachedExecutor(ExecutorStrategy):
             max_retries=3
         )
 
-        # Initialize Code Cache Manager
+        # Initialize Code Cache Manager (exact hash cache)
         self.cache_manager = CodeCacheManager(db_session) if db_session else None
 
+        # Initialize Semantic Code Cache Client (semantic similarity cache)
+        try:
+            self.semantic_cache = get_code_cache_client()
+            logger.info("✓ Semantic Code Cache client initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Semantic Code Cache: {e}. Semantic caching disabled.")
+            self.semantic_cache = None
+
         cache_status = "enabled" if self.cache_manager else "disabled (no DB session)"
-        logger.info(f"CachedExecutor initialized with Multi-Agent Architecture (model: {default_model}, cache: {cache_status})")
+        semantic_cache_status = "enabled" if self.semantic_cache else "disabled"
+        logger.info(f"CachedExecutor initialized with Multi-Agent Architecture")
+        logger.info(f"  Model: {default_model}")
+        logger.info(f"  Exact cache: {cache_status}")
+        logger.info(f"  Semantic cache: {semantic_cache_status}")
 
     async def execute(
         self,
@@ -389,7 +403,104 @@ class CachedExecutor(ExecutorStrategy):
                 logger.warning(f"Cache lookup failed: {e}. Continuing with AI generation.")
 
         # ═══════════════════════════════════════════════════════
-        # CACHE MISS or NO CACHE - Generate with AI
+        # SEMANTIC CACHE LOOKUP (if enabled and _cache_context exists)
+        # ═══════════════════════════════════════════════════════
+        if self.semantic_cache and "_cache_context" in context:
+            try:
+                cache_ctx = context["_cache_context"]
+                semantic_query = self._build_semantic_query(prompt_task, node, cache_ctx)
+
+                logger.info(f"🔍 Searching semantic code cache...")
+                matches = self.semantic_cache.search_code(
+                    query=semantic_query,
+                    threshold=0.85,
+                    top_k=3
+                )
+
+                if matches:
+                    best_match = matches[0]
+                    logger.info(f"🎯 Semantic cache HIT! Score: {best_match['score']:.3f}")
+                    logger.info(f"   Action: {best_match['node_action']}")
+                    logger.info(f"   Description: {best_match['node_description'][:60]}...")
+
+                    try:
+                        # Execute semantic cached code
+                        import time
+                        start_time = time.time()
+
+                        result = await self.e2b.execute_code(
+                            code=best_match['code'],
+                            context=context,
+                            timeout=timeout
+                        )
+
+                        execution_time_ms = (time.time() - start_time) * 1000
+
+                        # Validate output
+                        from .output_validator import OutputValidator
+                        validator = OutputValidator()
+
+                        # Create minimal node object for validation
+                        validation_node = type('Node', (), {
+                            'id': node_id or 'semantic_cache',
+                            'expected_outputs': node.get('expected_outputs') if node else None
+                        })()
+
+                        validation_result = validator.validate(result, validation_node)
+
+                        if validation_result.is_valid:
+                            # ✅ Semantic cached code validated successfully
+                            logger.info(f"✅ Semantic cached code validated successfully!")
+
+                            # Clean result
+                            clean_result = {k: v for k, v in result.items() if not k.startswith('_')}
+
+                            # Update context_manager
+                            context_manager.update(clean_result)
+
+                            # Build metadata
+                            metadata = {
+                                'cache_metadata': {
+                                    'cache_hit': True,
+                                    'cache_type': 'semantic',
+                                    'similarity_score': best_match['score'],
+                                    'matched_action': best_match['node_action'],
+                                    'cost_saved_usd': 0.003  # Estimated AI generation cost
+                                },
+                                'ai_metadata': {
+                                    'model': 'semantic_cache',
+                                    'generated_code': best_match['code'],
+                                    'from_semantic_cache': True
+                                },
+                                'execution_metadata': {
+                                    'stdout': result.get('_stdout', ''),
+                                    'stderr': result.get('_stderr', ''),
+                                    'exit_code': result.get('_exit_code', 0)
+                                }
+                            }
+
+                            logger.info(f"💰 Saved ~$0.003 with semantic cache (score: {best_match['score']:.3f})")
+                            return clean_result, metadata
+
+                        else:
+                            # Validation failed - fallback to AI generation
+                            logger.warning(f"❌ Semantic cached code failed validation:")
+                            for error in validation_result.errors:
+                                logger.warning(f"   - {error}")
+                            logger.info(f"🔄 Falling back to AI generation")
+
+                    except Exception as e:
+                        logger.warning(f"⚠️  Semantic cached code execution failed: {e}")
+                        logger.info(f"🔄 Falling back to AI generation")
+
+                else:
+                    logger.info(f"🔍 No semantic cache matches above threshold 0.85")
+
+            except Exception as e:
+                logger.warning(f"Semantic cache search failed: {e}. Continuing with AI generation.")
+
+        # ═══════════════════════════════════════════════════════
+        # CACHE MISS - Generate with AI
         # ═══════════════════════════════════════════════════════
         try:
             # Pasar context_manager al orchestrator
@@ -458,6 +569,20 @@ class CachedExecutor(ExecutorStrategy):
                         }
 
                         logger.info(f"💾 Code saved to cache for future reuse (code length: {len(generated_code)} chars)")
+
+                        # Save to semantic cache (async, don't await - run in background)
+                        if self.semantic_cache and not execution_failed:
+                            try:
+                                await self._save_to_semantic_cache(
+                                    code=generated_code,
+                                    task=prompt_task,
+                                    node=node,
+                                    context=context,
+                                    result=result
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to save to semantic cache: {e}")
+
                     else:
                         logger.warning(f"⚠️  No generated code found in code_generation metadata, skipping cache save")
                         logger.warning(f"   code_generation keys: {list(code_gen_meta.keys())}")
@@ -496,6 +621,213 @@ class CachedExecutor(ExecutorStrategy):
         except Exception as e:
             logger.error(f"❌ Multi-Agent execution failed: {e}")
             raise ExecutorError(f"Multi-Agent execution failed: {e}")
+
+    def _build_semantic_query(
+        self,
+        task: str,
+        node: Optional[Dict[str, Any]],
+        cache_context: Dict[str, Any]
+    ) -> str:
+        """
+        Build semantic search query from task, node, and cache context.
+
+        Combines:
+        - Task description
+        - Input schema (compact)
+        - Context insights
+
+        Args:
+            task: Natural language task/prompt
+            node: Optional node dictionary
+            cache_context: Cache context from GraphEngine
+
+        Returns:
+            Formatted search query string
+        """
+        import json
+
+        parts = []
+
+        # Task description
+        parts.append(f"Task: {task}")
+
+        # Node description (if available)
+        if node and 'description' in node:
+            parts.append(f"Description: {node['description']}")
+
+        # Input schema
+        input_schema = cache_context.get('input_schema', {})
+        if input_schema:
+            schema_str = json.dumps(input_schema, indent=2)
+            parts.append(f"Input schema:\n{schema_str}")
+
+        # Context insights
+        insights = cache_context.get('insights', [])
+        if insights:
+            insights_str = "\n- ".join(insights)
+            parts.append(f"Context:\n- {insights_str}")
+
+        return "\n\n".join(parts)
+
+    def _extract_imports(self, code: str) -> List[str]:
+        """
+        Extract library names from Python code imports.
+
+        Args:
+            code: Python source code
+
+        Returns:
+            List of imported library names
+
+        Example:
+            >>> code = "import fitz\\nfrom PIL import Image\\nimport base64"
+            >>> libs = _extract_imports(code)
+            >>> libs
+            ['fitz', 'PIL', 'base64']
+        """
+        import re
+
+        libraries = []
+
+        # Find "import X" statements
+        import_pattern = r'^import\s+([a-zA-Z0-9_]+)'
+        for match in re.finditer(import_pattern, code, re.MULTILINE):
+            libraries.append(match.group(1))
+
+        # Find "from X import Y" statements
+        from_pattern = r'^from\s+([a-zA-Z0-9_]+)\s+import'
+        for match in re.finditer(from_pattern, code, re.MULTILINE):
+            libraries.append(match.group(1))
+
+        # Remove duplicates and return
+        return list(set(libraries))
+
+    async def _generate_code_description(
+        self,
+        code: str,
+        task: str,
+        cache_context: Dict[str, Any]
+    ) -> str:
+        """
+        Generate natural language description of what the code does.
+
+        Uses a lightweight LLM call to create a concise technical description.
+
+        Args:
+            code: The Python code to describe
+            task: Original task/prompt
+            cache_context: Cache context with schema and insights
+
+        Returns:
+            2-3 sentence technical description
+
+        Example:
+            "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not scanned).
+             Returns plain text without formatting."
+        """
+        import json
+        from openai import AsyncOpenAI
+        import os
+
+        try:
+            client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+            prompt = f"""Describe what this code does in 2-3 technical sentences.
+
+Code:
+```python
+{code}
+```
+
+Task: {task}
+
+Input schema: {json.dumps(cache_context.get('input_schema', {}), indent=2)}
+
+Context: {', '.join(cache_context.get('insights', []))}
+
+Format:
+- Main functionality
+- Libraries/techniques used
+- Important requirements or limitations
+
+Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not scanned). Returns plain text without formatting."
+"""
+
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a technical documentation assistant. Be concise and precise."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=150
+            )
+
+            description = response.choices[0].message.content.strip()
+            logger.debug(f"Generated code description: {description[:60]}...")
+
+            return description
+
+        except Exception as e:
+            logger.warning(f"Failed to generate code description: {e}")
+            # Fallback to simple description
+            return f"Executes task: {task[:100]}"
+
+    async def _save_to_semantic_cache(
+        self,
+        code: str,
+        task: str,
+        node: Optional[Dict[str, Any]],
+        context: Dict[str, Any],
+        result: Dict[str, Any]
+    ) -> None:
+        """
+        Save successful code execution to semantic cache.
+
+        Args:
+            code: The generated Python code
+            task: Original task/prompt
+            node: Optional node dictionary
+            context: Execution context
+            result: Execution result (must be successful)
+        """
+        if not self.semantic_cache:
+            return
+
+        try:
+            cache_ctx = context.get("_cache_context")
+            if not cache_ctx:
+                logger.debug("No _cache_context found, skipping semantic cache save")
+                return
+
+            # Generate AI description
+            ai_description = await self._generate_code_description(code, task, cache_ctx)
+
+            # Extract libraries
+            libraries_used = self._extract_imports(code)
+
+            # Save to cache
+            success = self.semantic_cache.save_code(
+                ai_description=ai_description,
+                input_schema=cache_ctx.get('input_schema', {}),
+                insights=cache_ctx.get('insights', []),
+                config=cache_ctx.get('config', {}),
+                code=code,
+                node_action=node.get('id', 'unknown') if node else 'unknown',
+                node_description=node.get('description', task[:100]) if node else task[:100],
+                libraries_used=libraries_used
+            )
+
+            if success:
+                logger.info(f"✓ Code saved to semantic cache")
+                logger.debug(f"  Description: {ai_description[:60]}...")
+                logger.debug(f"  Libraries: {', '.join(libraries_used)}")
+            else:
+                logger.warning(f"Failed to save code to semantic cache")
+
+        except Exception as e:
+            logger.error(f"Error saving to semantic cache: {e}")
+            # Don't raise - semantic cache save is optional
 
 
 class AIExecutor(ExecutorStrategy):
