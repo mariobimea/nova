@@ -67,7 +67,7 @@ print(json.dumps({"insights": insights}, ensure_ascii=False))
     assert "analysis_code" in response.data
     assert "import fitz" in response.data["analysis_code"]
     assert "model" in response.data
-    assert response.data["model"] == "gpt-4o-mini"
+    assert response.data["model"] == "gpt-4o"
 
 
 @pytest.mark.asyncio
@@ -156,3 +156,85 @@ async def test_data_analyzer_with_error_history(data_analyzer, mock_openai_clien
     call_args = mock_openai_client.chat.completions.create.call_args
     prompt = call_args.kwargs["messages"][1]["content"]
     assert "ERRORES PREVIOS" in prompt
+
+
+def test_parse_insights_with_dict(data_analyzer):
+    """parse_insights soporta formato dict (original)"""
+    execution_result = {
+        "insights": {
+            "type": "pdf",
+            "pages": 5,
+            "has_text": True
+        }
+    }
+
+    insights = data_analyzer.parse_insights(execution_result)
+
+    assert isinstance(insights, dict)
+    assert insights["type"] == "pdf"
+    assert insights["pages"] == 5
+    assert insights["has_text"] is True
+
+
+def test_parse_insights_with_list(data_analyzer):
+    """parse_insights soporta formato lista (NUEVO) - convierte a dict"""
+    execution_result = {
+        "insights": [
+            {
+                "filename": "invoice.pdf",
+                "type": "pdf",
+                "pages": 1,
+                "has_text": False
+            },
+            {
+                "error": "CSV analysis failed: invalid format"
+            }
+        ]
+    }
+
+    insights = data_analyzer.parse_insights(execution_result)
+
+    # Verificar que se convirtió a dict con keys numeradas
+    assert isinstance(insights, dict)
+    assert "insight_0" in insights
+    assert "insight_1" in insights
+
+    # Verificar contenido del primer insight
+    assert insights["insight_0"]["filename"] == "invoice.pdf"
+    assert insights["insight_0"]["type"] == "pdf"
+    assert insights["insight_0"]["pages"] == 1
+
+    # Verificar contenido del segundo insight
+    assert "error" in insights["insight_1"]
+    assert "CSV analysis failed" in insights["insight_1"]["error"]
+
+
+def test_parse_insights_with_invalid_type(data_analyzer):
+    """parse_insights rechaza tipos inválidos (no dict ni lista)"""
+    execution_result = {
+        "insights": "this is a string, not dict or list"
+    }
+
+    insights = data_analyzer.parse_insights(execution_result)
+
+    # Debe retornar dict de error
+    assert isinstance(insights, dict)
+    assert insights["type"] == "error"
+    assert "must be dict or list" in insights["error"]
+    assert "str" in insights["error"]
+
+
+def test_parse_insights_from_stdout_with_list(data_analyzer):
+    """parse_insights parsea lista desde stdout JSON"""
+    execution_result = {
+        "_stdout": '{"insights": [{"type": "pdf", "pages": 2}, {"type": "image"}]}'
+    }
+
+    insights = data_analyzer.parse_insights(execution_result)
+
+    # Lista se convierte a dict
+    assert isinstance(insights, dict)
+    assert "insight_0" in insights
+    assert "insight_1" in insights
+    assert insights["insight_0"]["type"] == "pdf"
+    assert insights["insight_1"]["type"] == "image"

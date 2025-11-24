@@ -471,27 +471,38 @@ Ejemplos de insights NO ÚTILES (NO HAGAS ESTO):
 
         Esta función es pública porque el Orchestrator la necesita.
 
+        Soporta insights como dict o lista:
+        - Dict: {"key1": {...}, "key2": {...}}
+        - Lista: [{...}, {...}] -> Se convierte a {"insight_0": {...}, "insight_1": {...}}
+
         Args:
             execution_result: Resultado de E2B execution
 
         Returns:
-            Dict con insights parseados
+            Dict con insights parseados (siempre un dict, lista se convierte)
         """
         # 1. Intentar obtener de context (forma preferida)
         if "insights" in execution_result:
             insights = execution_result["insights"]
 
-            # ✅ NUEVO: Validar que sea un dict
-            if not isinstance(insights, dict):
-                self.logger.warning(f"⚠️ Insights no es dict: {type(insights)}")
-                return {
-                    "type": "error",
-                    "error": f"Insights must be dict, got {type(insights).__name__}",
-                    "raw_value": str(insights)[:200]  # Preview truncado
-                }
+            # ✅ Soportar dict (formato original)
+            if isinstance(insights, dict):
+                self.logger.info("✅ Insights encontrados en context (dict)")
+                return insights
 
-            self.logger.info("✅ Insights encontrados en context")
-            return insights
+            # ✅ NUEVO: Soportar lista (para múltiples análisis)
+            if isinstance(insights, list):
+                self.logger.info(f"✅ Insights es lista con {len(insights)} items, convirtiendo a dict")
+                # Convertir lista a dict con keys numeradas
+                return {f"insight_{i}": item for i, item in enumerate(insights)}
+
+            # ❌ Solo rechazar si NO es dict ni lista
+            self.logger.warning(f"⚠️ Insights no es dict ni lista: {type(insights)}")
+            return {
+                "type": "error",
+                "error": f"Insights must be dict or list, got {type(insights).__name__}",
+                "raw_value": str(insights)[:200]  # Preview truncado
+            }
 
         # 2. Intentar parsear del stdout
         if "_stdout" in execution_result:
@@ -507,17 +518,24 @@ Ejemplos de insights NO ÚTILES (NO HAGAS ESTO):
                         if "insights" in data:
                             insights = data["insights"]
 
-                            # ✅ NUEVO: Validar que sea un dict
-                            if not isinstance(insights, dict):
-                                self.logger.warning(f"⚠️ Insights parseados no es dict: {type(insights)}")
-                                return {
-                                    "type": "error",
-                                    "error": f"Insights must be dict, got {type(insights).__name__}",
-                                    "raw_value": str(insights)[:200]
-                                }
+                            # ✅ Soportar dict (formato original)
+                            if isinstance(insights, dict):
+                                self.logger.info("✅ Insights parseados del stdout (dict)")
+                                return insights
 
-                            self.logger.info("✅ Insights parseados del stdout")
-                            return insights
+                            # ✅ NUEVO: Soportar lista (para múltiples análisis)
+                            if isinstance(insights, list):
+                                self.logger.info(f"✅ Insights parseados del stdout (lista con {len(insights)} items)")
+                                # Convertir lista a dict con keys numeradas
+                                return {f"insight_{i}": item for i, item in enumerate(insights)}
+
+                            # ❌ Solo rechazar si NO es dict ni lista
+                            self.logger.warning(f"⚠️ Insights parseados no es dict ni lista: {type(insights)}")
+                            return {
+                                "type": "error",
+                                "error": f"Insights must be dict or list, got {type(insights).__name__}",
+                                "raw_value": str(insights)[:200]
+                            }
             except json.JSONDecodeError as e:
                 self.logger.warning(f"No se pudo parsear JSON del stdout: {e}")
 
