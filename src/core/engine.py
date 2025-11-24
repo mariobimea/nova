@@ -254,7 +254,8 @@ class GraphEngine:
         node: NodeType,
         context: ContextManager,
         workflow_definition: Dict[str, Any],
-        execution_id: Optional[int] = None
+        execution_id: Optional[int] = None,
+        cache_context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Execute a single node and return execution metadata.
@@ -332,7 +333,8 @@ class GraphEngine:
                     context_manager=context,  # Pass by reference (CachedExecutor updates in-place)
                     timeout=node.timeout,
                     workflow=workflow_definition,
-                    node={"id": node.id, "type": "action", "model": getattr(node, "model", None)}
+                    node={"id": node.id, "type": "action", "model": getattr(node, "model", None)},
+                    cache_context=cache_context  # Pass cache_context for semantic caching
                 )
 
                 # DEBUG: Log what executor returned
@@ -547,8 +549,8 @@ class GraphEngine:
 
         # Build cache context for semantic code matching
         # This extracts a compact schema representation used by CachedExecutor
+        # NOTE: We do NOT add this to context to avoid polluting the cache hash
         cache_context = build_cache_context(context.get_all())
-        context.set("_cache_context", cache_context)
         logger.info(f"Built cache context with {len(cache_context.get('input_schema', {}))} schema fields")
 
         # Find start node
@@ -577,7 +579,8 @@ class GraphEngine:
                     current_node,
                     context,
                     workflow_definition,
-                    execution.id if execution else None
+                    execution.id if execution else None,
+                    cache_context=cache_context
                 )
                 execution_trace.append(metadata)
 

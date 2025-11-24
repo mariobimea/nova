@@ -403,11 +403,11 @@ class CachedExecutor(ExecutorStrategy):
                 logger.warning(f"Cache lookup failed: {e}. Continuing with AI generation.")
 
         # ═══════════════════════════════════════════════════════
-        # SEMANTIC CACHE LOOKUP (if enabled and _cache_context exists)
+        # SEMANTIC CACHE LOOKUP (if enabled and cache_context provided)
         # ═══════════════════════════════════════════════════════
-        if self.semantic_cache and "_cache_context" in context:
+        cache_ctx = kwargs.get("cache_context")
+        if self.semantic_cache and cache_ctx:
             try:
-                cache_ctx = context["_cache_context"]
                 semantic_query = self._build_semantic_query(prompt_task, node, cache_ctx)
 
                 logger.info(f"🔍 Searching semantic code cache...")
@@ -571,14 +571,15 @@ class CachedExecutor(ExecutorStrategy):
                         logger.info(f"💾 Code saved to cache for future reuse (code length: {len(generated_code)} chars)")
 
                         # Save to semantic cache (async, don't await - run in background)
-                        if self.semantic_cache and not execution_failed:
+                        if self.semantic_cache and not execution_failed and cache_ctx:
                             try:
                                 await self._save_to_semantic_cache(
                                     code=generated_code,
                                     task=prompt_task,
                                     node=node,
                                     context=context,
-                                    result=result
+                                    result=result,
+                                    cache_context=cache_ctx
                                 )
                             except Exception as e:
                                 logger.warning(f"Failed to save to semantic cache: {e}")
@@ -779,7 +780,8 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
         task: str,
         node: Optional[Dict[str, Any]],
         context: Dict[str, Any],
-        result: Dict[str, Any]
+        result: Dict[str, Any],
+        cache_context: Optional[Dict[str, Any]] = None
     ) -> None:
         """
         Save successful code execution to semantic cache.
@@ -790,18 +792,18 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
             node: Optional node dictionary
             context: Execution context
             result: Execution result (must be successful)
+            cache_context: Optional cache context for semantic matching
         """
         if not self.semantic_cache:
             return
 
         try:
-            cache_ctx = context.get("_cache_context")
-            if not cache_ctx:
-                logger.debug("No _cache_context found, skipping semantic cache save")
+            if not cache_context:
+                logger.debug("No cache_context provided, skipping semantic cache save")
                 return
 
             # Generate AI description
-            ai_description = await self._generate_code_description(code, task, cache_ctx)
+            ai_description = await self._generate_code_description(code, task, cache_context)
 
             # Extract libraries
             libraries_used = self._extract_imports(code)
@@ -809,9 +811,9 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
             # Save to cache
             success = self.semantic_cache.save_code(
                 ai_description=ai_description,
-                input_schema=cache_ctx.get('input_schema', {}),
-                insights=cache_ctx.get('insights', []),
-                config=cache_ctx.get('config', {}),
+                input_schema=cache_context.get('input_schema', {}),
+                insights=cache_context.get('insights', []),
+                config=cache_context.get('config', {}),
                 code=code,
                 node_action=node.get('id', 'unknown') if node else 'unknown',
                 node_description=node.get('description', task[:100]) if node else task[:100],
