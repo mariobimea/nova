@@ -410,11 +410,16 @@ class CachedExecutor(ExecutorStrategy):
             try:
                 semantic_query = self._build_semantic_query(prompt_task, node, cache_ctx)
 
+                # Extract available keys from input_schema
+                available_keys = list(cache_ctx.get('input_schema', {}).keys())
+
                 logger.info(f"🔍 Searching semantic code cache...")
+                logger.debug(f"  Available keys: {available_keys}")
                 matches = self.semantic_cache.search_code(
                     query=semantic_query,
                     threshold=0.85,
-                    top_k=3
+                    top_k=3,
+                    available_keys=available_keys
                 )
 
                 if matches:

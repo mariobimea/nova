@@ -263,7 +263,8 @@ class SemanticCodeCacheClient:
         self,
         query: str,
         threshold: float = 0.85,
-        top_k: int = 5
+        top_k: int = 5,
+        available_keys: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Search for similar cached code.
@@ -272,6 +273,7 @@ class SemanticCodeCacheClient:
             query: Search query (task description + input schema + insights)
             threshold: Minimum similarity score (0-1, default: 0.85)
             top_k: Maximum number of results (default: 5)
+            available_keys: List of keys available in current context (for filtering)
 
         Returns:
             List of code matches with score, code, metadata
@@ -279,7 +281,8 @@ class SemanticCodeCacheClient:
         Example:
             matches = client.search_code(
                 query="Extract text from PDF\\nInput: pdf_data (base64)",
-                threshold=0.85
+                threshold=0.85,
+                available_keys=["pdf_data", "client_id"]
             )
             if matches:
                 best_code = matches[0]['code']
@@ -288,13 +291,17 @@ class SemanticCodeCacheClient:
             RAGServiceError: If service is unavailable or returns error
         """
         try:
+            payload = {
+                "query": query,
+                "threshold": threshold,
+                "top_k": top_k
+            }
+            if available_keys is not None:
+                payload["available_keys"] = available_keys
+
             response = self.session.post(
                 f"{self.base_url}/code/search",
-                json={
-                    "query": query,
-                    "threshold": threshold,
-                    "top_k": top_k
-                },
+                json=payload,
                 timeout=self.timeout
             )
             response.raise_for_status()
