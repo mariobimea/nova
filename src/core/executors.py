@@ -492,8 +492,10 @@ class CachedExecutor(ExecutorStrategy):
                         else:
                             # Validation failed - fallback to AI generation
                             logger.warning(f"❌ Semantic cached code failed validation:")
-                            for error in validation_result.errors:
-                                logger.warning(f"   - {error}")
+                            if validation_result.error_message:
+                                logger.warning(f"   Error: {validation_result.error_message}")
+                            for warning in validation_result.warnings:
+                                logger.warning(f"   Warning: {warning}")
                             logger.info(f"🔄 Falling back to AI generation")
 
                     except Exception as e:
