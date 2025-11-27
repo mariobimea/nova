@@ -442,18 +442,20 @@ class CachedExecutor(ExecutorStrategy):
                         execution_time_ms = (time.time() - start_time) * 1000
 
                         # Validate output
-                        from .output_validator import OutputValidator
-                        validator = OutputValidator()
+                        from .output_validator import auto_validate_output
 
-                        # Create minimal node object for validation
-                        validation_node = type('Node', (), {
-                            'id': node_id or 'semantic_cache',
-                            'expected_outputs': node.get('expected_outputs') if node else None
-                        })()
+                        # Get task description
+                        task = node.get('description', prompt_task) if node else prompt_task
 
-                        validation_result = validator.validate(result, validation_node)
+                        # Validate using auto_validate_output
+                        validation_result = auto_validate_output(
+                            task=task,
+                            context_before=context,
+                            context_after=result,
+                            generated_code=best_match['code']
+                        )
 
-                        if validation_result.is_valid:
+                        if validation_result.valid:
                             # ✅ Semantic cached code validated successfully
                             logger.info(f"✅ Semantic cached code validated successfully!")
 
@@ -708,6 +710,51 @@ class CachedExecutor(ExecutorStrategy):
         # Remove duplicates and return
         return list(set(libraries))
 
+    def _extract_required_context_keys(self, code: str) -> List[str]:
+        """
+        Extract context keys that the code actually uses.
+
+        This analyzes the generated code to find all context['key'] accesses,
+        which is critical for semantic cache filtering.
+
+        Args:
+            code: Python source code
+
+        Returns:
+            List of context keys used in the code
+
+        Example:
+            >>> code = "total = context['amount']\\npdf = context.get('pdf_data')"
+            >>> keys = _extract_required_context_keys(code)
+            >>> keys
+            ['amount', 'pdf_data']
+        """
+        import re
+
+        required_keys = set()
+
+        # Pattern 1: context['key']
+        pattern1 = r"context\['([^']+)'\]"
+        for match in re.finditer(pattern1, code):
+            required_keys.add(match.group(1))
+
+        # Pattern 2: context["key"]
+        pattern2 = r'context\["([^"]+)"\]'
+        for match in re.finditer(pattern2, code):
+            required_keys.add(match.group(1))
+
+        # Pattern 3: context.get('key')
+        pattern3 = r"context\.get\('([^']+)'"
+        for match in re.finditer(pattern3, code):
+            required_keys.add(match.group(1))
+
+        # Pattern 4: context.get("key")
+        pattern4 = r'context\.get\("([^"]+)"'
+        for match in re.finditer(pattern4, code):
+            required_keys.add(match.group(1))
+
+        return sorted(list(required_keys))
+
     async def _generate_code_description(
         self,
         code: str,
@@ -813,10 +860,31 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
             # Extract libraries
             libraries_used = self._extract_imports(code)
 
+            # Extract required context keys from code (CRITICAL for semantic cache filtering)
+            required_keys = self._extract_required_context_keys(code)
+
+            # Build input_schema with ONLY the keys the code actually uses
+            full_input_schema = cache_context.get('input_schema', {})
+            filtered_input_schema = {
+                key: full_input_schema.get(key, 'unknown')
+                for key in required_keys
+                if key in full_input_schema
+            }
+
+            # Add any required keys not in input_schema (might be from context directly)
+            for key in required_keys:
+                if key not in filtered_input_schema and key in context:
+                    # Infer type from actual value
+                    from .schema_extractor import _extract_type
+                    filtered_input_schema[key] = _extract_type(context[key])
+
+            logger.debug(f"Required keys extracted from code: {required_keys}")
+            logger.debug(f"Filtered input_schema: {filtered_input_schema}")
+
             # Save to cache
             success = self.semantic_cache.save_code(
                 ai_description=ai_description,
-                input_schema=cache_context.get('input_schema', {}),
+                input_schema=filtered_input_schema,  # Use filtered schema, not full schema
                 insights=cache_context.get('insights', []),
                 config=cache_context.get('config', {}),
                 code=code,
