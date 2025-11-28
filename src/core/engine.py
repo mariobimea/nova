@@ -403,6 +403,11 @@ class GraphEngine:
                             f"DecisionNode {node.id} must have 'code' attribute"
                         )
 
+                # Rebuild cache_context with current context state
+                # (context may have new keys added by previous nodes)
+                current_cache_context = build_cache_context(context.get_all())
+                logger.debug(f"🔄 Rebuilt cache context for decision node {node.id}: {len(current_cache_context.get('input_schema', {}))} schema fields")
+
                 # Execute code/prompt - all executors now return (result, metadata)
                 result, exec_metadata = await executor.execute(
                     code=code_or_prompt,
@@ -410,7 +415,8 @@ class GraphEngine:
                     context_manager=context,  # Pass by reference (CachedExecutor updates in-place)
                     timeout=node.timeout,
                     workflow=workflow_definition,
-                    node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)}
+                    node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)},
+                    cache_context=current_cache_context  # Pass CURRENT cache_context
                 )
 
                 # Store metadata - merge all metadata fields
