@@ -477,7 +477,8 @@ class CachedExecutor(ExecutorStrategy):
                         'node_action': match.get('node_action', 'unknown'),
                         'node_description': match.get('node_description', '')[:100],  # Truncate descriptions
                         'required_keys': match.get('metadata', {}).get('required_keys', []),
-                        'libraries_used': match.get('metadata', {}).get('libraries_used', [])
+                        'libraries_used': match.get('metadata', {}).get('libraries_used', []),
+                        'code': match.get('code', '')  # ✨ ADD CODE
                     })
 
                 # Add ALL results (including below threshold) for debugging
@@ -488,7 +489,8 @@ class CachedExecutor(ExecutorStrategy):
                         'node_description': match.get('node_description', '')[:100],
                         'required_keys': match.get('metadata', {}).get('required_keys', []),
                         'libraries_used': match.get('metadata', {}).get('libraries_used', []),
-                        'above_threshold': match.get('score', 0) >= threshold
+                        'above_threshold': match.get('score', 0) >= threshold,
+                        'code': match.get('code', '')  # ✨ ADD CODE
                     })
 
                 logger.info(f"📊 Semantic cache search completed: {len(matches)} matches above {threshold}, {len(all_matches)} total results in {search_time_ms:.0f}ms")

@@ -151,6 +151,7 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
 
       // TODOS los resultados (incluyendo por debajo del threshold)
       // ✨ NUEVO: Para debugging y ajustar threshold
+      // ✨ INCLUYE CÓDIGO COMPLETO de cada match
       "all_results": [
         {
           "score": 0.92,
@@ -158,7 +159,8 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
           "node_description": "Read emails from IMAP server",
           "required_keys": ["email_user", "email_password", "email_host"],
           "libraries_used": ["imaplib", "email"],
-          "above_threshold": true
+          "above_threshold": true,
+          "code": "import imaplib\nimport email\n\nimap = imaplib.IMAP4_SSL(context['email_host'])\n..."
         },
         {
           "score": 0.87,
@@ -166,7 +168,8 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
           "node_description": "Extract text from PDF files",
           "required_keys": ["pdf_data"],
           "libraries_used": ["fitz", "base64"],
-          "above_threshold": true
+          "above_threshold": true,
+          "code": "import fitz\nimport base64\n\npdf_bytes = base64.b64decode(context['pdf_data'])\n..."
         },
         {
           "score": 0.78,
@@ -174,7 +177,8 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
           "node_description": "Send email via SMTP",
           "required_keys": ["smtp_host", "email_user", "email_password"],
           "libraries_used": ["smtplib"],
-          "above_threshold": false
+          "above_threshold": false,
+          "code": "import smtplib\nfrom email.mime.text import MIMEText\n\nsmtp = smtplib.SMTP(context['smtp_host'])\n..."
         },
         {
           "score": 0.65,
@@ -182,7 +186,8 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
           "node_description": "Parse CSV data",
           "required_keys": ["csv_data"],
           "libraries_used": ["csv"],
-          "above_threshold": false
+          "above_threshold": false,
+          "code": "import csv\nimport io\n\ncsv_reader = csv.DictReader(io.StringIO(context['csv_data']))\n..."
         }
       ],
 
@@ -289,7 +294,51 @@ Puedes encontrar código que:
 - Identificar patrones en embeddings que necesitan mejora
 - Ver qué tipos de tareas tienen mejor/peor similaridad
 
-### 5. Troubleshooting
+### 5. Inspeccionar Código de Matches No Utilizados ⭐ NUEVO
+Ahora cada resultado incluye el **código completo**. Puedes:
+
+**Ver código de un match específico**:
+```sql
+SELECT
+    node_id,
+    result->>'node_action' as action,
+    (result->>'score')::float as score,
+    result->>'code' as code
+FROM (
+    SELECT
+        node_id,
+        jsonb_array_elements(ai_metadata->'semantic_cache_search'->'all_results') as result
+    FROM chain_of_work
+    WHERE execution_id = 123
+) sub
+WHERE (result->>'score')::float = 0.78  -- Ver código del match con score 0.78
+ORDER BY score DESC;
+```
+
+**Comparar código de diferentes matches**:
+```sql
+-- Ver qué diferencias hay entre un match usado (0.92) y uno descartado (0.78)
+SELECT
+    (result->>'score')::float as score,
+    result->>'node_action' as action,
+    result->>'code' as code,
+    result->>'above_threshold' as used
+FROM (
+    SELECT jsonb_array_elements(ai_metadata->'semantic_cache_search'->'all_results') as result
+    FROM chain_of_work
+    WHERE execution_id = 123 AND node_id = 'read_emails'
+) sub
+WHERE (result->>'score')::float IN (0.92, 0.78)
+ORDER BY score DESC;
+```
+
+**Beneficios**:
+- Ver exactamente qué código hubiera ejecutado cada match
+- Entender por qué algunos matches tienen scores más altos
+- Identificar si código con score bajo hubiera funcionado igual
+- Copiar código útil de matches descartados para debugging
+
+### 6. Troubleshooting
 Cuando un workflow falla o tiene comportamiento inesperado, puedes:
 ```sql
 SELECT
