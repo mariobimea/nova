@@ -254,8 +254,7 @@ class GraphEngine:
         node: NodeType,
         context: ContextManager,
         workflow_definition: Dict[str, Any],
-        execution_id: Optional[int] = None,
-        cache_context: Optional[Dict[str, Any]] = None
+        execution_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Execute a single node and return execution metadata.
@@ -265,6 +264,10 @@ class GraphEngine:
             context: Current workflow context
             workflow_definition: Complete workflow definition (for model resolution)
             execution_id: Optional execution ID for chain_of_work logging
+
+        Note:
+            cache_context is built dynamically inside this method for each ActionNode
+            to ensure it reflects the current state of the context.
 
         Returns:
             Execution metadata dict with:
@@ -581,8 +584,7 @@ class GraphEngine:
                     current_node,
                     context,
                     workflow_definition,
-                    execution.id if execution else None,
-                    cache_context=cache_context
+                    execution.id if execution else None
                 )
                 execution_trace.append(metadata)
 
