@@ -31,6 +31,12 @@ CREDENTIAL_FIELDS = {
     'private_key', 'public_key', 'secret_key'
 }
 
+# Workflow configuration fields (always present, no need in schema)
+WORKFLOW_CONFIG_FIELDS = {
+    'database_schemas',
+    'sender_whitelist'
+}
+
 
 def extract_compact_schema(context: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -128,8 +134,24 @@ def _extract_type(value: Any) -> str:
         if not value:
             return "list_empty"
 
+        first = value[0]
+
+        # Special case: attachments (list of dicts with 'filename' and 'data')
+        if isinstance(first, dict) and 'filename' in first and 'data' in first:
+            # Extract file extensions from attachments
+            extensions = set()
+            for item in value[:5]:  # Sample up to 5 attachments
+                filename = item.get('filename', '')
+                if '.' in filename:
+                    ext = filename.split('.')[-1].lower()
+                    extensions.add(ext)
+
+            if extensions:
+                return f"list[attachment:{','.join(sorted(extensions))}]"
+            return "list[attachment]"
+
         # Analyze first element to infer list type
-        first_type = _extract_type(value[0])
+        first_type = _extract_type(first)
         return f"list[{first_type}]"
 
     # Dict
@@ -308,17 +330,13 @@ def build_cache_context(context: Dict[str, Any]) -> Dict[str, Any]:
         if key.startswith('_'):
             continue
 
-        # Credentials → config (as boolean flags)
+        # Credentials → config (as boolean flags, NOT in schema)
         if key.lower() in CREDENTIAL_FIELDS:
             config[f"has_{key}"] = value is not None and value != ""
             continue
 
-        # Database schemas → special handling
-        if key == "database_schemas":
-            if isinstance(value, dict):
-                input_schema[key] = _simplify_db_schema(value)
-            else:
-                input_schema[key] = _extract_type(value)
+        # Workflow config fields → skip (always present, no need in schema)
+        if key in WORKFLOW_CONFIG_FIELDS:
             continue
 
         # Regular data → schema

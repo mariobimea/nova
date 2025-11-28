@@ -414,13 +414,29 @@ class CachedExecutor(ExecutorStrategy):
                 # Extract available keys from input_schema
                 available_keys = list(cache_ctx.get('input_schema', {}).keys())
 
+                # For validation, also include keys from config (credentials) and context
+                # These are NOT in input_schema but ARE available in context
+                all_available_keys = set(available_keys)
+
+                # Add credential keys from config
+                config_keys = cache_ctx.get('config', {})
+                for key in config_keys:
+                    if key.startswith('has_') and config_keys[key]:
+                        # Extract actual key name (remove 'has_' prefix)
+                        actual_key = key[4:]  # Remove 'has_'
+                        all_available_keys.add(actual_key)
+
+                # Add workflow config fields (always present)
+                all_available_keys.update(['database_schemas', 'sender_whitelist'])
+
                 logger.info(f"🔍 Searching semantic code cache...")
-                logger.debug(f"  Available keys: {available_keys}")
+                logger.debug(f"  Schema keys: {available_keys}")
+                logger.debug(f"  All available keys: {sorted(all_available_keys)}")
                 matches = self.semantic_cache.search_code(
                     query=semantic_query,
                     threshold=0.85,
                     top_k=3,
-                    available_keys=available_keys
+                    available_keys=available_keys  # Still search by schema keys only
                 )
 
                 if matches:
@@ -434,14 +450,13 @@ class CachedExecutor(ExecutorStrategy):
                     can_use_cached_code = True
 
                     if required_keys:
-                        available_keys_set = set(available_keys)
                         required_keys_set = set(required_keys)
 
-                        missing_keys = required_keys_set - available_keys_set
+                        missing_keys = required_keys_set - all_available_keys
                         if missing_keys:
                             logger.warning(f"⚠️ Semantic cache match requires keys we don't have: {missing_keys}")
                             logger.warning(f"   Required: {required_keys_set}")
-                            logger.warning(f"   Available: {available_keys_set}")
+                            logger.warning(f"   Available: {sorted(all_available_keys)}")
                             logger.info(f"🔄 Skipping cached code, falling back to AI generation")
                             can_use_cached_code = False
                         else:
@@ -683,7 +698,7 @@ class CachedExecutor(ExecutorStrategy):
         # Input schema (full, unfiltered)
         input_schema = cache_context.get('input_schema', {})
         if input_schema:
-            schema_str = json.dumps(input_schema, indent=2)
+            schema_str = json.dumps(input_schema, indent=2, sort_keys=True)
             parts.append(f"Input Schema:\n{schema_str}")
 
         return "\n\n".join(parts)
