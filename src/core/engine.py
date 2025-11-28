@@ -326,6 +326,11 @@ class GraphEngine:
                             f"ActionNode {node.id} must have 'code' attribute"
                         )
 
+                # Rebuild cache_context with current context state
+                # (context may have new keys added by previous nodes)
+                current_cache_context = build_cache_context(context.get_all())
+                logger.debug(f"🔄 Rebuilt cache context for node {node.id}: {len(current_cache_context.get('input_schema', {}))} schema fields")
+
                 # Execute code/prompt - all executors now return (result, metadata)
                 result, exec_metadata = await executor.execute(
                     code=code_or_prompt,
@@ -334,7 +339,7 @@ class GraphEngine:
                     timeout=node.timeout,
                     workflow=workflow_definition,
                     node={"id": node.id, "type": "action", "model": getattr(node, "model", None)},
-                    cache_context=cache_context  # Pass cache_context for semantic caching
+                    cache_context=current_cache_context  # Pass CURRENT cache_context (not initial)
                 )
 
                 # DEBUG: Log what executor returned
@@ -547,11 +552,8 @@ class GraphEngine:
         # Initialize context
         context = ContextManager(initial_context or {})
 
-        # Build cache context for semantic code matching
-        # This extracts a compact schema representation used by CachedExecutor
-        # NOTE: We do NOT add this to context to avoid polluting the cache hash
-        cache_context = build_cache_context(context.get_all())
-        logger.info(f"Built cache context with {len(cache_context.get('input_schema', {}))} schema fields")
+        # NOTE: cache_context is now built dynamically for each node in the execution loop
+        # This ensures it reflects the current state of the context (which gets updated after each node)
 
         # Find start node
         start_node = next(n for n in nodes.values() if isinstance(n, StartNode))
