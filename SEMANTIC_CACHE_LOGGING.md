@@ -150,8 +150,7 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
       ],
 
       // TODOS los resultados (incluyendo por debajo del threshold)
-      // ✨ NUEVO: Para debugging y ajustar threshold
-      // ✨ INCLUYE CÓDIGO COMPLETO de cada match
+      // ✨ INCLUYE: código completo + input_schema original
       "all_results": [
         {
           "score": 0.92,
@@ -159,6 +158,12 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
           "node_description": "Read emails from IMAP server",
           "required_keys": ["email_user", "email_password", "email_host"],
           "libraries_used": ["imaplib", "email"],
+          "input_schema": {
+            "email_user": "string",
+            "email_password": "string",
+            "email_host": "string",
+            "email_port": "integer"
+          },
           "above_threshold": true,
           "code": "import imaplib\nimport email\n\nimap = imaplib.IMAP4_SSL(context['email_host'])\n..."
         },
@@ -168,6 +173,10 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
           "node_description": "Extract text from PDF files",
           "required_keys": ["pdf_data"],
           "libraries_used": ["fitz", "base64"],
+          "input_schema": {
+            "pdf_data": "base64_string",
+            "client_id": "integer"
+          },
           "above_threshold": true,
           "code": "import fitz\nimport base64\n\npdf_bytes = base64.b64decode(context['pdf_data'])\n..."
         },
@@ -177,6 +186,12 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
           "node_description": "Send email via SMTP",
           "required_keys": ["smtp_host", "email_user", "email_password"],
           "libraries_used": ["smtplib"],
+          "input_schema": {
+            "smtp_host": "string",
+            "smtp_port": "integer",
+            "email_user": "string",
+            "email_password": "string"
+          },
           "above_threshold": false,
           "code": "import smtplib\nfrom email.mime.text import MIMEText\n\nsmtp = smtplib.SMTP(context['smtp_host'])\n..."
         },
@@ -186,6 +201,9 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
           "node_description": "Parse CSV data",
           "required_keys": ["csv_data"],
           "libraries_used": ["csv"],
+          "input_schema": {
+            "csv_data": "string"
+          },
           "above_threshold": false,
           "code": "import csv\nimport io\n\ncsv_reader = csv.DictReader(io.StringIO(context['csv_data']))\n..."
         }
@@ -294,7 +312,62 @@ Puedes encontrar código que:
 - Identificar patrones en embeddings que necesitan mejora
 - Ver qué tipos de tareas tienen mejor/peor similaridad
 
-### 5. Inspeccionar Código de Matches No Utilizados ⭐ NUEVO
+### 5. Comparar Input Schemas ⭐ NUEVO
+Cada resultado incluye el **input_schema original** del código cacheado. Esto te permite:
+
+**Ver diferencias de schema entre current vs cached**:
+```sql
+-- Comparar schema actual vs schema de match con score 0.78
+SELECT
+    result->>'node_action' as action,
+    (result->>'score')::float as score,
+    result->'input_schema' as cached_schema,
+    ai_metadata->'semantic_cache_search'->'available_keys' as current_keys
+FROM (
+    SELECT
+        ai_metadata,
+        jsonb_array_elements(ai_metadata->'semantic_cache_search'->'all_results') as result
+    FROM chain_of_work
+    WHERE execution_id = 123 AND node_id = 'read_emails'
+) sub
+WHERE (result->>'score')::float = 0.78;
+```
+
+**Identificar schema drift (evolución del schema)**:
+```sql
+-- Ver cómo ha evolucionado el schema de un mismo node_action
+SELECT
+    result->>'node_action' as action,
+    (result->>'score')::float as score,
+    result->'input_schema' as schema,
+    jsonb_object_keys(result->'input_schema') as keys
+FROM (
+    SELECT jsonb_array_elements(ai_metadata->'semantic_cache_search'->'all_results') as result
+    FROM chain_of_work
+    WHERE node_id = 'read_emails'
+    ORDER BY created_at DESC
+    LIMIT 5
+) sub
+WHERE result->>'node_action' = 'read_emails'
+ORDER BY score DESC;
+```
+
+**Beneficios**:
+- **Entender scores bajos**: Ver si score bajo se debe a diferencias en schema
+- **Detectar schema evolution**: Identificar cuando schema ha cambiado (ej: se agregó `email_port`)
+- **Validar compatibilidad**: Ver si código antiguo puede funcionar con schema nuevo
+- **Optimizar embeddings**: Si schemas muy similares tienen scores bajos, mejorar embeddings
+
+**Ejemplo de uso**:
+```
+Score 0.92: Schema tiene ["email_user", "email_password", "email_host", "email_port"]
+Score 0.78: Schema tiene ["smtp_host", "smtp_port", "email_user", "email_password"]
+
+→ Score bajo porque usa SMTP (send) en vez de IMAP (read)
+→ Pero si necesitas send, este código con 0.78 es más útil que el 0.92!
+```
+
+### 6. Inspeccionar Código de Matches No Utilizados
 Ahora cada resultado incluye el **código completo**. Puedes:
 
 **Ver código de un match específico**:
@@ -338,7 +411,7 @@ ORDER BY score DESC;
 - Identificar si código con score bajo hubiera funcionado igual
 - Copiar código útil de matches descartados para debugging
 
-### 6. Troubleshooting
+### 7. Troubleshooting
 Cuando un workflow falla o tiene comportamiento inesperado, puedes:
 ```sql
 SELECT
