@@ -335,10 +335,11 @@ class GraphEngine:
                 logger.debug(f"🔄 Rebuilt cache context for node {node.id}: {len(current_cache_context.get('input_schema', {}))} schema fields")
 
                 # Execute code/prompt - all executors now return (result, metadata)
+                # 🔥 CRITICAL: Pass the SAME context_manager instance to maintain analysis history across nodes
                 result, exec_metadata = await executor.execute(
                     code=code_or_prompt,
                     context=context.get_all(),
-                    context_manager=context,  # Pass by reference (CachedExecutor updates in-place)
+                    context_manager=context,  # Pass ContextManager by reference to preserve analysis_history
                     timeout=node.timeout,
                     workflow=workflow_definition,
                     node={"id": node.id, "type": "action", "model": getattr(node, "model", None)},
@@ -409,10 +410,11 @@ class GraphEngine:
                 logger.debug(f"🔄 Rebuilt cache context for decision node {node.id}: {len(current_cache_context.get('input_schema', {}))} schema fields")
 
                 # Execute code/prompt - all executors now return (result, metadata)
+                # 🔥 CRITICAL: Pass the SAME context_manager instance to maintain analysis history across nodes
                 result, exec_metadata = await executor.execute(
                     code=code_or_prompt,
                     context=context.get_all(),
-                    context_manager=context,  # Pass by reference (CachedExecutor updates in-place)
+                    context_manager=context,  # Pass ContextManager by reference to preserve analysis_history
                     timeout=node.timeout,
                     workflow=workflow_definition,
                     node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)},

@@ -343,6 +343,9 @@ Usa esta información para generar código que aproveche TODA la data disponible
                 if isinstance(schema_entry, dict) and "insights" in schema_entry:
                     all_insights[key] = schema_entry["insights"]
 
+            # 🔍 DEBUG: Log insights from previous nodes
+            self.logger.info(f"📊 Found {len(all_insights)} keys with insights from previous nodes: {list(all_insights.keys())}")
+
             if all_insights:
                 all_insights_json = json.dumps(all_insights, indent=2, ensure_ascii=False)
                 prompt += """

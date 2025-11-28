@@ -214,11 +214,14 @@ class MultiAgentOrchestrator:
         # 🔥 NUEVO: Usar ContextManager proporcionado o crear uno nuevo
         if context_manager is None:
             context_manager = ContextManager(context)
-            self.logger.info(f"   Orchestrator created new ContextManager")
+            self.logger.info(f"🆕 Orchestrator created new ContextManager")
         else:
             # Actualizar el contexto del ContextManager con el contexto actual
             context_manager.update(context)
-            self.logger.info(f"   Orchestrator using provided ContextManager with {len(context_manager.get_summary().analysis_history)} previous analyses")
+            analysis_count = len(context_manager.get_summary().analysis_history)
+            analyzed_keys = context_manager.get_summary().get_analyzed_keys()
+            self.logger.info(f"♻️ Orchestrator reusing ContextManager with {analysis_count} previous analyses")
+            self.logger.info(f"   Already analyzed keys: {list(analyzed_keys)}")
 
         # 🔥 NUEVO: Lista para registrar todos los steps
         steps_to_persist: List[Dict] = []

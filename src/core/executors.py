@@ -406,9 +406,14 @@ class CachedExecutor(ExecutorStrategy):
         # SEMANTIC CACHE LOOKUP (if enabled and cache_context provided)
         # ═══════════════════════════════════════════════════════
         cache_ctx = kwargs.get("cache_context")
+        semantic_cache_metadata = None  # Will be populated if semantic cache search happens
+
         logger.info(f"🔎 Semantic cache check: semantic_cache={'enabled' if self.semantic_cache else 'disabled'}, cache_ctx={'present' if cache_ctx else 'missing'}")
         if self.semantic_cache and cache_ctx:
             try:
+                import time
+                search_start = time.time()
+
                 semantic_query = self._build_semantic_query(prompt_task, node, cache_ctx)
 
                 # Extract available keys from input_schema
@@ -432,12 +437,41 @@ class CachedExecutor(ExecutorStrategy):
                 logger.info(f"🔍 Searching semantic code cache...")
                 logger.debug(f"  Schema keys: {available_keys}")
                 logger.debug(f"  All available keys: {sorted(all_available_keys)}")
+
+                # Search semantic cache
+                threshold = 0.85
+                top_k = 3
                 matches = self.semantic_cache.search_code(
                     query=semantic_query,
-                    threshold=0.85,
-                    top_k=3,
+                    threshold=threshold,
+                    top_k=top_k,
                     available_keys=available_keys  # Still search by schema keys only
                 )
+
+                search_time_ms = (time.time() - search_start) * 1000
+
+                # Build semantic cache search metadata
+                semantic_cache_metadata = {
+                    'query': semantic_query[:500] + '...' if len(semantic_query) > 500 else semantic_query,  # Truncate long queries
+                    'threshold': threshold,
+                    'top_k': top_k,
+                    'available_keys': available_keys,
+                    'all_available_keys': sorted(list(all_available_keys)),
+                    'search_time_ms': round(search_time_ms, 2),
+                    'results': []
+                }
+
+                # Add search results to metadata
+                for match in matches:
+                    semantic_cache_metadata['results'].append({
+                        'score': round(match.get('score', 0), 3),
+                        'node_action': match.get('node_action', 'unknown'),
+                        'node_description': match.get('node_description', '')[:100],  # Truncate descriptions
+                        'required_keys': match.get('metadata', {}).get('required_keys', []),
+                        'libraries_used': match.get('metadata', {}).get('libraries_used', [])
+                    })
+
+                logger.info(f"📊 Semantic cache search completed: {len(matches)} matches in {search_time_ms:.0f}ms")
 
                 if matches:
                     best_match = matches[0]
@@ -448,6 +482,7 @@ class CachedExecutor(ExecutorStrategy):
                     # Validate that we have all required keys for this code
                     required_keys = best_match.get('metadata', {}).get('required_keys', [])
                     can_use_cached_code = True
+                    validation_reason = None
 
                     if required_keys:
                         required_keys_set = set(required_keys)
@@ -459,8 +494,10 @@ class CachedExecutor(ExecutorStrategy):
                             logger.warning(f"   Available: {sorted(all_available_keys)}")
                             logger.info(f"🔄 Skipping cached code, falling back to AI generation")
                             can_use_cached_code = False
+                            validation_reason = f"missing_keys: {sorted(list(missing_keys))}"
                         else:
                             logger.info(f"✓ All required keys available: {required_keys_set}")
+                            validation_reason = "all_keys_available"
 
                     if can_use_cached_code:
                         try:
@@ -494,6 +531,17 @@ class CachedExecutor(ExecutorStrategy):
                                 # ✅ Semantic cached code validated successfully
                                 logger.info(f"✅ Semantic cached code validated successfully!")
 
+                                # Add selection info to semantic cache metadata
+                                semantic_cache_metadata['selected_match'] = {
+                                    'score': round(best_match['score'], 3),
+                                    'node_action': best_match['node_action'],
+                                    'reason': 'best_score',
+                                    'key_validation': validation_reason,
+                                    'output_validation': 'passed',
+                                    'execution_time_ms': round(execution_time_ms, 2)
+                                }
+                                semantic_cache_metadata['cache_hit'] = True
+
                                 # Clean result
                                 clean_result = {k: v for k, v in result.items() if not k.startswith('_')}
 
@@ -512,7 +560,8 @@ class CachedExecutor(ExecutorStrategy):
                                     'ai_metadata': {
                                         'model': 'semantic_cache',
                                         'generated_code': best_match['code'],
-                                        'from_semantic_cache': True
+                                        'from_semantic_cache': True,
+                                        'semantic_cache_search': semantic_cache_metadata  # ✨ ADD SEARCH METADATA
                                     },
                                     'execution_metadata': {
                                         'stdout': result.get('_stdout', ''),
@@ -533,15 +582,60 @@ class CachedExecutor(ExecutorStrategy):
                                     logger.warning(f"   Warning: {warning}")
                                 logger.info(f"🔄 Falling back to AI generation")
 
+                                # Record validation failure in metadata
+                                validation_errors = [validation_result.error_message] if validation_result.error_message else []
+                                validation_errors.extend(validation_result.warnings)
+
+                                semantic_cache_metadata['selected_match'] = {
+                                    'score': round(best_match['score'], 3),
+                                    'node_action': best_match['node_action'],
+                                    'reason': 'best_score',
+                                    'key_validation': validation_reason,
+                                    'output_validation': 'failed',
+                                    'validation_errors': validation_errors
+                                }
+                                semantic_cache_metadata['cache_hit'] = False
+                                semantic_cache_metadata['fallback_reason'] = 'output_validation_failed'
+
                         except Exception as e:
                             logger.warning(f"⚠️  Semantic cached code execution failed: {e}")
                             logger.info(f"🔄 Falling back to AI generation")
 
+                            # Record execution failure in metadata
+                            semantic_cache_metadata['selected_match'] = {
+                                'score': round(best_match['score'], 3),
+                                'node_action': best_match['node_action'],
+                                'reason': 'best_score',
+                                'key_validation': validation_reason,
+                                'execution_error': str(e)
+                            }
+                            semantic_cache_metadata['cache_hit'] = False
+                            semantic_cache_metadata['fallback_reason'] = 'execution_failed'
+                    else:
+                        # Can't use cached code due to missing keys
+                        semantic_cache_metadata['selected_match'] = {
+                            'score': round(best_match['score'], 3),
+                            'node_action': best_match['node_action'],
+                            'reason': 'skipped',
+                            'key_validation': validation_reason
+                        }
+                        semantic_cache_metadata['cache_hit'] = False
+                        semantic_cache_metadata['fallback_reason'] = 'missing_required_keys'
+
                 else:
                     logger.info(f"🔍 No semantic cache matches above threshold 0.85")
+                    # Record that no matches were found
+                    semantic_cache_metadata['cache_hit'] = False
+                    semantic_cache_metadata['fallback_reason'] = 'no_matches_above_threshold'
 
             except Exception as e:
                 logger.warning(f"Semantic cache search failed: {e}. Continuing with AI generation.")
+                # Record search error
+                if semantic_cache_metadata is None:
+                    semantic_cache_metadata = {}
+                semantic_cache_metadata['search_error'] = str(e)
+                semantic_cache_metadata['cache_hit'] = False
+                semantic_cache_metadata['fallback_reason'] = 'search_failed'
 
         # ═══════════════════════════════════════════════════════
         # CACHE MISS - Generate with AI
@@ -643,6 +737,10 @@ class CachedExecutor(ExecutorStrategy):
             # ═══════════════════════════════════════════════════════
             # BUILD METADATA DICT
             # ═══════════════════════════════════════════════════════
+            # Add semantic cache metadata to ai_metadata (if search was performed)
+            if semantic_cache_metadata:
+                ai_metadata['semantic_cache_search'] = semantic_cache_metadata
+
             metadata = {
                 'ai_metadata': ai_metadata,
                 'execution_metadata': {
