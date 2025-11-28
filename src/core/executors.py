@@ -438,7 +438,7 @@ class CachedExecutor(ExecutorStrategy):
                 logger.debug(f"  Schema keys: {available_keys}")
                 logger.debug(f"  All available keys: {sorted(all_available_keys)}")
 
-                # Search semantic cache
+                # Search semantic cache with threshold 0.85
                 threshold = 0.85
                 top_k = 3
                 matches = self.semantic_cache.search_code(
@@ -446,6 +446,14 @@ class CachedExecutor(ExecutorStrategy):
                     threshold=threshold,
                     top_k=top_k,
                     available_keys=available_keys  # Still search by schema keys only
+                )
+
+                # ALSO search with threshold=0.0 to get ALL results for debugging
+                all_matches = self.semantic_cache.search_code(
+                    query=semantic_query,
+                    threshold=0.0,  # Get ALL results regardless of score
+                    top_k=10,  # Get up to 10 results for analysis
+                    available_keys=available_keys
                 )
 
                 search_time_ms = (time.time() - search_start) * 1000
@@ -458,12 +466,13 @@ class CachedExecutor(ExecutorStrategy):
                     'available_keys': available_keys,
                     'all_available_keys': sorted(list(all_available_keys)),
                     'search_time_ms': round(search_time_ms, 2),
-                    'results': []
+                    'results_above_threshold': [],  # Matches above 0.85
+                    'all_results': []  # ALL results returned by search (for debugging)
                 }
 
-                # Add search results to metadata
+                # Add matches above threshold to metadata
                 for match in matches:
-                    semantic_cache_metadata['results'].append({
+                    semantic_cache_metadata['results_above_threshold'].append({
                         'score': round(match.get('score', 0), 3),
                         'node_action': match.get('node_action', 'unknown'),
                         'node_description': match.get('node_description', '')[:100],  # Truncate descriptions
@@ -471,7 +480,18 @@ class CachedExecutor(ExecutorStrategy):
                         'libraries_used': match.get('metadata', {}).get('libraries_used', [])
                     })
 
-                logger.info(f"📊 Semantic cache search completed: {len(matches)} matches in {search_time_ms:.0f}ms")
+                # Add ALL results (including below threshold) for debugging
+                for match in all_matches:
+                    semantic_cache_metadata['all_results'].append({
+                        'score': round(match.get('score', 0), 3),
+                        'node_action': match.get('node_action', 'unknown'),
+                        'node_description': match.get('node_description', '')[:100],
+                        'required_keys': match.get('metadata', {}).get('required_keys', []),
+                        'libraries_used': match.get('metadata', {}).get('libraries_used', []),
+                        'above_threshold': match.get('score', 0) >= threshold
+                    })
+
+                logger.info(f"📊 Semantic cache search completed: {len(matches)} matches above {threshold}, {len(all_matches)} total results in {search_time_ms:.0f}ms")
 
                 if matches:
                     best_match = matches[0]

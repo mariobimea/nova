@@ -130,7 +130,9 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
       "available_keys": ["email_user", "email_password"],
       "all_available_keys": ["email_user", "email_password", "client_id", "database_schemas"],
       "search_time_ms": 45.23,
-      "results": [
+
+      // Matches por encima del threshold (0.85)
+      "results_above_threshold": [
         {
           "score": 0.92,
           "node_action": "read_emails",
@@ -146,6 +148,44 @@ Esto asegura que el Chain of Work registre toda la información de búsqueda sem
           "libraries_used": ["fitz", "base64"]
         }
       ],
+
+      // TODOS los resultados (incluyendo por debajo del threshold)
+      // ✨ NUEVO: Para debugging y ajustar threshold
+      "all_results": [
+        {
+          "score": 0.92,
+          "node_action": "read_emails",
+          "node_description": "Read emails from IMAP server",
+          "required_keys": ["email_user", "email_password", "email_host"],
+          "libraries_used": ["imaplib", "email"],
+          "above_threshold": true
+        },
+        {
+          "score": 0.87,
+          "node_action": "extract_pdf",
+          "node_description": "Extract text from PDF files",
+          "required_keys": ["pdf_data"],
+          "libraries_used": ["fitz", "base64"],
+          "above_threshold": true
+        },
+        {
+          "score": 0.78,
+          "node_action": "send_email",
+          "node_description": "Send email via SMTP",
+          "required_keys": ["smtp_host", "email_user", "email_password"],
+          "libraries_used": ["smtplib"],
+          "above_threshold": false
+        },
+        {
+          "score": 0.65,
+          "node_action": "parse_csv",
+          "node_description": "Parse CSV data",
+          "required_keys": ["csv_data"],
+          "libraries_used": ["csv"],
+          "above_threshold": false
+        }
+      ],
+
       "selected_match": {
         "score": 0.92,
         "node_action": "read_emails",
@@ -202,19 +242,62 @@ Puedes ver exactamente:
 - Comparación con tiempo de generación AI
 - Hit rate del semantic cache
 
-### 3. Optimización
-- Identificar por qué matches con buen score no se usan (missing keys, validation failed)
-- Ajustar threshold basado en datos reales
-- Mejorar calidad de código cacheado
+### 3. Optimización del Threshold ⭐ NUEVO
+Ahora puedes ver **TODOS** los resultados devueltos, no solo los que superan 0.85:
 
-### 4. Troubleshooting
+**Ejemplo**: Si ves muchos resultados con score 0.78-0.84 que hubieran funcionado, puedes:
+- Bajar el threshold a 0.75
+- Aumentar el hit rate del semantic cache
+- Ahorrar más en costos de AI
+
+**Query SQL para analizar threshold óptimo**:
+```sql
+-- Ver distribución de scores de todos los resultados
+SELECT
+    node_id,
+    jsonb_array_elements(ai_metadata->'semantic_cache_search'->'all_results') as result,
+    (jsonb_array_elements(ai_metadata->'semantic_cache_search'->'all_results')->>'score')::float as score
+FROM chain_of_work
+WHERE execution_id = 123
+ORDER BY score DESC;
+
+-- Identificar "near misses" (scores cercanos a 0.85 que no se usaron)
+SELECT
+    node_id,
+    result->>'node_action' as action,
+    (result->>'score')::float as score,
+    result->>'above_threshold' as used
+FROM (
+    SELECT
+        node_id,
+        jsonb_array_elements(ai_metadata->'semantic_cache_search'->'all_results') as result
+    FROM chain_of_work
+    WHERE execution_id = 123
+) sub
+WHERE (result->>'score')::float BETWEEN 0.75 AND 0.84
+ORDER BY score DESC;
+```
+
+### 4. Identificar Código Útil No Utilizado
+Puedes encontrar código que:
+- Tiene score 0.78-0.84 (cerca del threshold)
+- Tiene todas las required_keys disponibles
+- Hubiera funcionado pero fue descartado por score bajo
+
+**Esto te permite**:
+- Ajustar threshold de forma data-driven
+- Identificar patrones en embeddings que necesitan mejora
+- Ver qué tipos de tareas tienen mejor/peor similaridad
+
+### 5. Troubleshooting
 Cuando un workflow falla o tiene comportamiento inesperado, puedes:
 ```sql
 SELECT
     node_id,
     ai_metadata->'semantic_cache_search'->>'cache_hit' as cache_hit,
     ai_metadata->'semantic_cache_search'->>'fallback_reason' as reason,
-    ai_metadata->'semantic_cache_search'->'selected_match'->>'score' as best_score
+    ai_metadata->'semantic_cache_search'->'selected_match'->>'score' as best_score,
+    jsonb_array_length(ai_metadata->'semantic_cache_search'->'all_results') as total_results
 FROM chain_of_work
 WHERE execution_id = 123;
 ```
