@@ -445,7 +445,7 @@ class CachedExecutor(ExecutorStrategy):
                     query=semantic_query,
                     threshold=threshold,
                     top_k=top_k,
-                    available_keys=available_keys  # Still search by schema keys only
+                    available_keys=list(all_available_keys)  # Use ALL keys (schema + credentials)
                 )
 
                 # ALSO search with threshold=0.0 to get ALL results for debugging
@@ -453,7 +453,7 @@ class CachedExecutor(ExecutorStrategy):
                     query=semantic_query,
                     threshold=0.0,  # Get ALL results regardless of score
                     top_k=10,  # Get up to 10 results for analysis
-                    available_keys=available_keys
+                    available_keys=list(all_available_keys)  # Use ALL keys (schema + credentials)
                 )
 
                 search_time_ms = (time.time() - search_start) * 1000
