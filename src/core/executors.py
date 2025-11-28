@@ -428,79 +428,98 @@ class CachedExecutor(ExecutorStrategy):
                     logger.info(f"   Action: {best_match['node_action']}")
                     logger.info(f"   Description: {best_match['node_description'][:60]}...")
 
-                    try:
-                        # Execute semantic cached code
-                        import time
-                        start_time = time.time()
+                    # Validate that we have all required keys for this code
+                    required_keys = best_match.get('metadata', {}).get('required_keys', [])
+                    can_use_cached_code = True
 
-                        result = await self.e2b.execute_code(
-                            code=best_match['code'],
-                            context=context,
-                            timeout=timeout
-                        )
+                    if required_keys:
+                        available_keys_set = set(available_keys)
+                        required_keys_set = set(required_keys)
 
-                        execution_time_ms = (time.time() - start_time) * 1000
-
-                        # Validate output
-                        from .output_validator import auto_validate_output
-
-                        # Get task description
-                        task = node.get('description', prompt_task) if node else prompt_task
-
-                        # Validate using auto_validate_output
-                        validation_result = auto_validate_output(
-                            task=task,
-                            context_before=context,
-                            context_after=result,
-                            generated_code=best_match['code']
-                        )
-
-                        if validation_result.valid:
-                            # ✅ Semantic cached code validated successfully
-                            logger.info(f"✅ Semantic cached code validated successfully!")
-
-                            # Clean result
-                            clean_result = {k: v for k, v in result.items() if not k.startswith('_')}
-
-                            # Update context_manager
-                            context_manager.update(clean_result)
-
-                            # Build metadata
-                            metadata = {
-                                'cache_metadata': {
-                                    'cache_hit': True,
-                                    'cache_type': 'semantic',
-                                    'similarity_score': best_match['score'],
-                                    'matched_action': best_match['node_action'],
-                                    'cost_saved_usd': 0.003  # Estimated AI generation cost
-                                },
-                                'ai_metadata': {
-                                    'model': 'semantic_cache',
-                                    'generated_code': best_match['code'],
-                                    'from_semantic_cache': True
-                                },
-                                'execution_metadata': {
-                                    'stdout': result.get('_stdout', ''),
-                                    'stderr': result.get('_stderr', ''),
-                                    'exit_code': result.get('_exit_code', 0)
-                                }
-                            }
-
-                            logger.info(f"💰 Saved ~$0.003 with semantic cache (score: {best_match['score']:.3f})")
-                            return clean_result, metadata
-
+                        missing_keys = required_keys_set - available_keys_set
+                        if missing_keys:
+                            logger.warning(f"⚠️ Semantic cache match requires keys we don't have: {missing_keys}")
+                            logger.warning(f"   Required: {required_keys_set}")
+                            logger.warning(f"   Available: {available_keys_set}")
+                            logger.info(f"🔄 Skipping cached code, falling back to AI generation")
+                            can_use_cached_code = False
                         else:
-                            # Validation failed - fallback to AI generation
-                            logger.warning(f"❌ Semantic cached code failed validation:")
-                            if validation_result.error_message:
-                                logger.warning(f"   Error: {validation_result.error_message}")
-                            for warning in validation_result.warnings:
-                                logger.warning(f"   Warning: {warning}")
-                            logger.info(f"🔄 Falling back to AI generation")
+                            logger.info(f"✓ All required keys available: {required_keys_set}")
 
-                    except Exception as e:
-                        logger.warning(f"⚠️  Semantic cached code execution failed: {e}")
-                        logger.info(f"🔄 Falling back to AI generation")
+                    if can_use_cached_code:
+                        try:
+                            # Execute semantic cached code
+                            import time
+                            start_time = time.time()
+
+                            result = await self.e2b.execute_code(
+                                code=best_match['code'],
+                                context=context,
+                                timeout=timeout
+                            )
+
+                            execution_time_ms = (time.time() - start_time) * 1000
+
+                            # Validate output
+                            from .output_validator import auto_validate_output
+
+                            # Get task description
+                            task = node.get('description', prompt_task) if node else prompt_task
+
+                            # Validate using auto_validate_output
+                            validation_result = auto_validate_output(
+                                task=task,
+                                context_before=context,
+                                context_after=result,
+                                generated_code=best_match['code']
+                            )
+
+                            if validation_result.valid:
+                                # ✅ Semantic cached code validated successfully
+                                logger.info(f"✅ Semantic cached code validated successfully!")
+
+                                # Clean result
+                                clean_result = {k: v for k, v in result.items() if not k.startswith('_')}
+
+                                # Update context_manager
+                                context_manager.update(clean_result)
+
+                                # Build metadata
+                                metadata = {
+                                    'cache_metadata': {
+                                        'cache_hit': True,
+                                        'cache_type': 'semantic',
+                                        'similarity_score': best_match['score'],
+                                        'matched_action': best_match['node_action'],
+                                        'cost_saved_usd': 0.003  # Estimated AI generation cost
+                                    },
+                                    'ai_metadata': {
+                                        'model': 'semantic_cache',
+                                        'generated_code': best_match['code'],
+                                        'from_semantic_cache': True
+                                    },
+                                    'execution_metadata': {
+                                        'stdout': result.get('_stdout', ''),
+                                        'stderr': result.get('_stderr', ''),
+                                        'exit_code': result.get('_exit_code', 0)
+                                    }
+                                }
+
+                                logger.info(f"💰 Saved ~$0.003 with semantic cache (score: {best_match['score']:.3f})")
+                                return clean_result, metadata
+
+                            else:
+                                # Validation failed - fallback to AI generation
+                                logger.warning(f"❌ Semantic cached code failed validation:")
+                                if validation_result.error_message:
+                                    logger.warning(f"   Error: {validation_result.error_message}")
+                                for warning in validation_result.warnings:
+                                    logger.warning(f"   Warning: {warning}")
+                                logger.info(f"🔄 Falling back to AI generation")
+
+                        except Exception as e:
+                            logger.warning(f"⚠️  Semantic cached code execution failed: {e}")
+                            logger.info(f"🔄 Falling back to AI generation")
 
                 else:
                     logger.info(f"🔍 No semantic cache matches above threshold 0.85")
@@ -639,16 +658,15 @@ class CachedExecutor(ExecutorStrategy):
         cache_context: Dict[str, Any]
     ) -> str:
         """
-        Build semantic search query from task, node, and cache context.
+        Build semantic search query from task and input schema.
 
-        Combines:
-        - Task description
-        - Input schema (compact)
-        - Context insights
+        Simplified to only use:
+        - Prompt (task description)
+        - Full input schema (no filtering)
 
         Args:
             task: Natural language task/prompt
-            node: Optional node dictionary
+            node: Optional node dictionary (unused now)
             cache_context: Cache context from GraphEngine
 
         Returns:
@@ -658,24 +676,14 @@ class CachedExecutor(ExecutorStrategy):
 
         parts = []
 
-        # Task description
-        parts.append(f"Task: {task}")
+        # Prompt (task description)
+        parts.append(f"Prompt: {task}")
 
-        # Node description (if available)
-        if node and 'description' in node:
-            parts.append(f"Description: {node['description']}")
-
-        # Input schema
+        # Input schema (full, unfiltered)
         input_schema = cache_context.get('input_schema', {})
         if input_schema:
             schema_str = json.dumps(input_schema, indent=2)
-            parts.append(f"Input schema:\n{schema_str}")
-
-        # Context insights
-        insights = cache_context.get('insights', [])
-        if insights:
-            insights_str = "\n- ".join(insights)
-            parts.append(f"Context:\n- {insights_str}")
+            parts.append(f"Input Schema:\n{schema_str}")
 
         return "\n\n".join(parts)
 
@@ -856,49 +864,36 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
                 logger.debug("No cache_context provided, skipping semantic cache save")
                 return
 
-            # Generate AI description
-            ai_description = await self._generate_code_description(code, task, cache_context)
-
             # Extract libraries
             libraries_used = self._extract_imports(code)
 
-            # Extract required context keys from code (CRITICAL for semantic cache filtering)
+            # Extract required context keys from code (for validation, not for search)
             required_keys = self._extract_required_context_keys(code)
 
-            # Build input_schema with ONLY the keys the code actually uses
+            # Get FULL input schema (no filtering)
             full_input_schema = cache_context.get('input_schema', {})
-            filtered_input_schema = {
-                key: full_input_schema.get(key, 'unknown')
-                for key in required_keys
-                if key in full_input_schema
-            }
-
-            # Add any required keys not in input_schema (might be from context directly)
-            for key in required_keys:
-                if key not in filtered_input_schema and key in context:
-                    # Infer type from actual value
-                    from .schema_extractor import _extract_type
-                    filtered_input_schema[key] = _extract_type(context[key])
 
             logger.debug(f"Required keys extracted from code: {required_keys}")
-            logger.debug(f"Filtered input_schema: {filtered_input_schema}")
+            logger.debug(f"Saving with FULL input_schema: {list(full_input_schema.keys())}")
 
             # Save to cache
             success = self.semantic_cache.save_code(
-                ai_description=ai_description,
-                input_schema=filtered_input_schema,  # Use filtered schema, not full schema
-                insights=cache_context.get('insights', []),
+                ai_description=task,  # Save prompt as-is, no AI generation
+                input_schema=full_input_schema,  # Use FULL schema, not filtered
+                insights=[],  # Empty, we don't save insights anymore
                 config=cache_context.get('config', {}),
                 code=code,
                 node_action=node.get('id', 'unknown') if node else 'unknown',
                 node_description=node.get('description', task[:100]) if node else task[:100],
-                libraries_used=libraries_used
+                libraries_used=libraries_used,
+                required_keys=required_keys  # Save for validation later
             )
 
             if success:
                 logger.info(f"✓ Code saved to semantic cache")
-                logger.debug(f"  Description: {ai_description[:60]}...")
+                logger.debug(f"  Prompt: {task[:60]}...")
                 logger.debug(f"  Libraries: {', '.join(libraries_used)}")
+                logger.debug(f"  Required keys: {required_keys}")
             else:
                 logger.warning(f"Failed to save code to semantic cache")
 

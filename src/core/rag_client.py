@@ -340,53 +340,62 @@ class SemanticCodeCacheClient:
         code: str,
         node_action: str,
         node_description: str,
-        libraries_used: List[str]
+        libraries_used: List[str],
+        required_keys: Optional[List[str]] = None
     ) -> bool:
         """
         Save successful code execution to semantic cache.
 
         Args:
-            ai_description: Natural language description of what code does
-            input_schema: Compact input data schema
-            insights: Context insights
+            ai_description: Prompt/task description (saved as-is now)
+            input_schema: FULL input data schema (no filtering)
+            insights: Context insights (empty list now)
             config: Configuration flags (credentials, etc.)
             code: The Python code
             node_action: Action type from workflow node
             node_description: Description from workflow node
             libraries_used: List of libraries imported in code
+            required_keys: Keys that the code actually uses (for validation)
 
         Returns:
             True if saved successfully, False otherwise
 
         Example:
             success = client.save_code(
-                ai_description="Extracts text from PDF using PyMuPDF",
-                input_schema={"pdf_data": "base64_large"},
-                insights=["PDF format", "Text extraction"],
-                config={"has_credentials": False},
+                ai_description="Read email and extract PDF attachments",
+                input_schema={"email_user": "string", "email_password": "string", ...},
+                insights=[],
+                config={"has_credentials": True},
                 code="import fitz\\n...",
                 node_action="extract_pdf",
                 node_description="Extract invoice text",
-                libraries_used=["fitz", "base64"]
+                libraries_used=["fitz", "base64"],
+                required_keys=["email_user", "email_password"]
             )
         """
         try:
+            payload = {
+                "ai_description": ai_description,
+                "input_schema": input_schema,
+                "insights": insights,
+                "config": config,
+                "code": code,
+                "node_action": node_action,
+                "node_description": node_description,
+                "metadata": {
+                    "success_count": 1,
+                    "created_at": datetime.now().isoformat(),
+                    "libraries_used": libraries_used
+                }
+            }
+
+            # Add required_keys if provided
+            if required_keys is not None:
+                payload["metadata"]["required_keys"] = required_keys
+
             response = self.session.post(
                 f"{self.base_url}/code/save",
-                json={
-                    "ai_description": ai_description,
-                    "input_schema": input_schema,
-                    "insights": insights,
-                    "config": config,
-                    "code": code,
-                    "node_action": node_action,
-                    "node_description": node_description,
-                    "metadata": {
-                        "success_count": 1,
-                        "created_at": datetime.now().isoformat(),
-                        "libraries_used": libraries_used
-                    }
-                },
+                json=payload,
                 timeout=self.timeout
             )
             response.raise_for_status()
