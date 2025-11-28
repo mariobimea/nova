@@ -406,6 +406,7 @@ class CachedExecutor(ExecutorStrategy):
         # SEMANTIC CACHE LOOKUP (if enabled and cache_context provided)
         # ═══════════════════════════════════════════════════════
         cache_ctx = kwargs.get("cache_context")
+        logger.info(f"🔎 Semantic cache check: semantic_cache={'enabled' if self.semantic_cache else 'disabled'}, cache_ctx={'present' if cache_ctx else 'missing'}")
         if self.semantic_cache and cache_ctx:
             try:
                 semantic_query = self._build_semantic_query(prompt_task, node, cache_ctx)
