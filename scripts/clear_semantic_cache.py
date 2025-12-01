@@ -31,14 +31,14 @@ def main():
 
         # Clear cache using RAG service endpoint
         import requests
-        response = requests.delete(
-            f"{rag_url}/code/cache/clear",
+        response = requests.post(
+            f"{rag_url}/code/clear",
             timeout=30
         )
 
         if response.status_code == 200:
             data = response.json()
-            deleted_count = data.get("deleted_count", 0)
+            deleted_count = data.get("codes_deleted", 0)
             print(f"✓  {deleted_count} códigos eliminados del semantic cache")
         elif response.status_code == 404:
             print("⚠️  El endpoint de clear no está disponible en el RAG service")

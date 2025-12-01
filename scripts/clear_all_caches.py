@@ -52,14 +52,14 @@ def clear_semantic_cache():
         return True  # Not an error, just skip
 
     try:
-        response = requests.delete(
-            f"{rag_url}/code/cache/clear",
+        response = requests.post(
+            f"{rag_url}/code/clear",
             timeout=30
         )
 
         if response.status_code == 200:
             data = response.json()
-            deleted_count = data.get("deleted_count", 0)
+            deleted_count = data.get("codes_deleted", 0)
             print(f"   ✓ {deleted_count} códigos eliminados")
             return True
         elif response.status_code == 404:
