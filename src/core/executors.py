@@ -860,46 +860,75 @@ class CachedExecutor(ExecutorStrategy):
 
     def _extract_required_context_keys(self, code: str) -> List[str]:
         """
-        Extract context keys that the code actually uses.
+        Extract context keys that the code actually READS (not writes).
 
-        This analyzes the generated code to find all context['key'] accesses,
+        This analyzes the generated code to find all context['key'] READ accesses,
         which is critical for semantic cache filtering.
+
+        IMPORTANT: We only extract INPUT keys (reads), NOT output keys (writes).
+        - READ: context.get('amount') or context['amount'] (without assignment)
+        - WRITE: context['has_pdf_decision'] = ... (assignment, NOT an input)
 
         Args:
             code: Python source code
 
         Returns:
-            List of context keys used in the code
+            List of context keys that the code READS (inputs only)
 
         Example:
-            >>> code = "total = context['amount']\\npdf = context.get('pdf_data')"
+            >>> code = "total = context['amount']\\ncontext['result'] = total"
             >>> keys = _extract_required_context_keys(code)
             >>> keys
-            ['amount', 'pdf_data']
+            ['amount']  # 'result' is excluded (it's a write)
         """
         import re
 
         required_keys = set()
 
-        # Pattern 1: context['key']
-        pattern1 = r"context\['([^']+)'\]"
-        for match in re.finditer(pattern1, code):
+        # Pattern for context.get('key') or context.get("key")
+        # These are ALWAYS reads (safe to include)
+        pattern_get_single = r"context\.get\('([^']+)'"
+        pattern_get_double = r'context\.get\("([^"]+)"'
+
+        for match in re.finditer(pattern_get_single, code):
+            required_keys.add(match.group(1))
+        for match in re.finditer(pattern_get_double, code):
             required_keys.add(match.group(1))
 
-        # Pattern 2: context["key"]
-        pattern2 = r'context\["([^"]+)"\]'
-        for match in re.finditer(pattern2, code):
-            required_keys.add(match.group(1))
+        # Pattern for context['key'] or context["key"]
+        # We need to EXCLUDE writes (context['key'] = ...)
+        # Strategy: Find all context['key'] accesses, then remove those followed by '='
 
-        # Pattern 3: context.get('key')
-        pattern3 = r"context\.get\('([^']+)'"
-        for match in re.finditer(pattern3, code):
-            required_keys.add(match.group(1))
+        # Find all context['key'] (single quotes)
+        pattern_bracket_single = r"context\['([^']+)'\]"
+        for match in re.finditer(pattern_bracket_single, code):
+            key = match.group(1)
+            match_end = match.end()
 
-        # Pattern 4: context.get("key")
-        pattern4 = r'context\.get\("([^"]+)"'
-        for match in re.finditer(pattern4, code):
-            required_keys.add(match.group(1))
+            # Check if this is a write (followed by '=', possibly with whitespace)
+            # Extract a few characters after the match to check for '='
+            lookahead = code[match_end:match_end+5].lstrip()
+
+            # If next non-whitespace char is '=', this is a WRITE, skip it
+            if lookahead.startswith('='):
+                continue
+
+            # Otherwise, it's a READ, include it
+            required_keys.add(key)
+
+        # Find all context["key"] (double quotes)
+        pattern_bracket_double = r'context\["([^"]+)"\]'
+        for match in re.finditer(pattern_bracket_double, code):
+            key = match.group(1)
+            match_end = match.end()
+
+            # Check if this is a write (followed by '=')
+            lookahead = code[match_end:match_end+5].lstrip()
+
+            if lookahead.startswith('='):
+                continue
+
+            required_keys.add(key)
 
         return sorted(list(required_keys))
 

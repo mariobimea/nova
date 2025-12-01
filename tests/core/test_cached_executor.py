@@ -441,6 +441,165 @@ class TestExecute:
         assert call_args["error_history"] is None  # First attempt
 
 
+class TestExtractRequiredContextKeys:
+    """Test _extract_required_context_keys method - distinguish reads from writes."""
+
+    @pytest.fixture(autouse=True)
+    def setup_executor(self, monkeypatch):
+        """Setup executor for each test."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test123")
+        monkeypatch.setenv("E2B_API_KEY", "e2b-test123")
+
+        with patch('openai.OpenAI'):
+            self.executor = CachedExecutor()
+
+    def test_extract_reads_context_get(self):
+        """Should extract keys from context.get() - always reads."""
+        code = """
+attachments = context.get('attachments', [])
+amount = context.get('amount')
+"""
+        keys = self.executor._extract_required_context_keys(code)
+        assert set(keys) == {'attachments', 'amount'}
+
+    def test_extract_reads_bracket_notation(self):
+        """Should extract keys from context['key'] when NOT assigning."""
+        code = """
+# These are READS (inputs)
+value = context['amount']
+if context['has_attachments']:
+    process(context['data'])
+"""
+        keys = self.executor._extract_required_context_keys(code)
+        assert set(keys) == {'amount', 'has_attachments', 'data'}
+
+    def test_exclude_writes_bracket_notation(self):
+        """Should EXCLUDE keys from context['key'] = ... (writes/outputs)."""
+        code = """
+# This is a WRITE (output) - should NOT be in required keys
+context['has_pdf_decision'] = evaluate_pdf_attachment(context)
+"""
+        keys = self.executor._extract_required_context_keys(code)
+        assert 'has_pdf_decision' not in keys
+
+    def test_mixed_reads_and_writes(self):
+        """Should distinguish reads from writes in same code."""
+        code = """
+# READS (inputs - should be included)
+attachments = context.get('attachments', [])
+amount = context['amount']
+
+# WRITES (outputs - should be EXCLUDED)
+context['has_pdf_decision'] = evaluate_pdf_attachment(attachments)
+context['amount_decision'] = 'high' if amount > 1000 else 'low'
+
+# More READS
+if context['validate']:
+    check(context['data'])
+"""
+        keys = self.executor._extract_required_context_keys(code)
+
+        # Should include only READS
+        assert 'attachments' in keys
+        assert 'amount' in keys
+        assert 'validate' in keys
+        assert 'data' in keys
+
+        # Should EXCLUDE writes
+        assert 'has_pdf_decision' not in keys
+        assert 'amount_decision' not in keys
+
+    def test_real_world_has_pdf_decision_node(self):
+        """Real example from has_pdf_decision node - the bug we fixed."""
+        code = """
+def evaluate_pdf_attachment(context):
+    attachments = context.get('attachments', [])
+
+    for attachment in attachments:
+        if attachment.get('content_type') == 'application/pdf':
+            return True
+
+    return False
+
+# This is the OUTPUT - should NOT be in required keys
+context['has_pdf_decision'] = evaluate_pdf_attachment(context)
+"""
+        keys = self.executor._extract_required_context_keys(code)
+
+        # Should only require 'attachments' (the input)
+        assert 'attachments' in keys
+
+        # Should NOT require 'has_pdf_decision' (the output)
+        assert 'has_pdf_decision' not in keys
+
+    def test_real_world_amount_decision_node(self):
+        """Real example from amount_decision node."""
+        code = """
+amount = context.get('amount', 0)
+
+# This is the OUTPUT - should NOT be in required keys
+context['amount_decision'] = 'high' if amount > 1000 else 'low'
+"""
+        keys = self.executor._extract_required_context_keys(code)
+
+        # Should only require 'amount' (the input)
+        assert keys == ['amount']
+
+        # Should NOT require 'amount_decision' (the output)
+        assert 'amount_decision' not in keys
+
+    def test_assignment_with_spaces(self):
+        """Should detect assignment even with spaces around =."""
+        code = """
+# Various spacing around =
+context['output1'] = value1
+context['output2']  =  value2
+context['output3']=value3
+
+# Read (no assignment)
+input_val = context['input']
+"""
+        keys = self.executor._extract_required_context_keys(code)
+
+        # Should only include the read
+        assert keys == ['input']
+
+    def test_double_quotes(self):
+        """Should work with both single and double quotes."""
+        code = """
+# Reads with double quotes
+value1 = context["amount"]
+value2 = context.get("data")
+
+# Writes with double quotes (should be excluded)
+context["output"] = result
+"""
+        keys = self.executor._extract_required_context_keys(code)
+
+        assert set(keys) == {'amount', 'data'}
+        assert 'output' not in keys
+
+    def test_empty_code(self):
+        """Should return empty list for code with no context access."""
+        code = """
+import json
+print("Hello world")
+x = 1 + 2
+"""
+        keys = self.executor._extract_required_context_keys(code)
+        assert keys == []
+
+    def test_sorted_output(self):
+        """Should return keys sorted alphabetically."""
+        code = """
+z = context.get('zebra')
+a = context.get('apple')
+m = context.get('mango')
+"""
+        keys = self.executor._extract_required_context_keys(code)
+        assert keys == ['apple', 'mango', 'zebra']
+
+
 class TestIntegration:
     """Integration tests with real KnowledgeManager (no mocks)."""
 
