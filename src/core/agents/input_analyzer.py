@@ -204,7 +204,10 @@ Tarea a resolver: {task}
 Contexto disponible AHORA (keys + valores resumidos):
 {json.dumps(context_summary, indent=2, ensure_ascii=False)}
 
-{history_section}
+You have access to context['_analyzed_keys'] which contains paths to data that has already been analyzed by DataAnalyzer.
+
+Check if there are unanalyzed data sources.
+If ANY unanalyzed data exists → needs_analysis = True
 
 Devuelve JSON con esta estructura exacta:
 {{
@@ -213,38 +216,14 @@ Devuelve JSON con esta estructura exacta:
   "reasoning": "Por qué decidiste esto"
 }}
 
-✅ Necesitas análisis (needs_analysis=true) SOLO si el CONTEXTO ACTUAL contiene keys NUEVAS (no en historial) con:
-- Data binaria YA PRESENTE (PDFs, imágenes, archivos en base64)
-  Ejemplo: {{"pdf_data": "<string: 500000 chars>"}} → needs_analysis=true (SI es nuevo)
-- Data muy grande YA PRESENTE (strings >10000 caracteres)
-  Ejemplo: {{"email_raw": "<string: 50000 chars>"}} → needs_analysis=true (SI es nuevo)
-- Estructuras complejas YA PRESENTES (dictionaries, arrays con contenido anidado)
-  Ejemplo: {{"attachments": "<list: 2 items>"}} → needs_analysis=true (SI es nuevo)
-  Ejemplo: {{"metadata": "<dict: 5 items>"}} → needs_analysis=true (SI es nuevo)
-
-  ⚠️ IMPORTANTE: Si ves "<dict: X items>" o "<list: X items>" → ES UNA ESTRUCTURA COMPLEJA
-  → Esto significa que hay datos anidados que necesitan ser analizados
-  → needs_analysis=true (SOLO si no está en el historial)
-
-  Es decir, si no se ve claramente la data Y no está en el historial, se requiere de análisis
+✅ Necesitas análisis (needs_analysis=true) si hay data SIN analizar:
+- PDFs, imágenes, archivos binarios que NO están en _analyzed_keys
+- Estructuras complejas (dict, list) que NO están en _analyzed_keys
+- Data muy grande (strings >10000 chars) que NO está en _analyzed_keys
 
 ❌ NO necesitas análisis (needs_analysis=false) si:
-- Todas las keys complejas YA fueron analizadas (aparecen en historial)
-- El CONTEXTO ACTUAL solo tiene valores simples NUEVOS (strings cortos, números, booleans, null)
-  Ejemplo: {{"email_user": "user@example.com", "port": 993}} → needs_analysis=false
-- Credenciales o configuración (API keys, hosts, passwords)
-  Ejemplo: {{"db_host": "localhost", "api_key": "xyz"}} → needs_analysis=false
-
-
-🔴 ERRORES COMUNES A EVITAR:
-- ❌ NO digas needs_analysis=true para keys que YA están en el historial
-  → Si una key ya fue analizada, NO la re-analices
-- ❌ NO digas needs_analysis=true porque "la tarea va a generar data compleja"
-  → La tarea todavía NO se ejecutó, esa data NO existe aún
-- ❌ NO digas needs_analysis=true porque "hay múltiples fuentes de datos"
-  → Si son solo credenciales (db_host, email_user), NO necesita análisis
-- ❌ NO digas needs_analysis=true por tareas complejas si el contexto es simple
-  → La complejidad de la TAREA no importa, importa la complejidad del CONTEXTO
+- La data YA está en _analyzed_keys
+- Solo hay valores simples (strings cortos, números, booleans, credenciales)
 
 Complejidad (basada en la TAREA, no en el contexto):
 - "simple": Tarea trivial (1-2 pasos obvios)

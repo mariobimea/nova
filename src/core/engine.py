@@ -561,7 +561,14 @@ class GraphEngine:
         self._validate_graph(nodes, edges)
 
         # Initialize context
-        context = ContextManager(initial_context or {})
+        initial_ctx = initial_context or {}
+
+        # 🔥 NUEVO: Inicializar _analyzed_keys para tracking de análisis
+        # Esto permite al InputAnalyzer saber qué keys ya fueron analizadas
+        if '_analyzed_keys' not in initial_ctx:
+            initial_ctx['_analyzed_keys'] = []
+
+        context = ContextManager(initial_ctx)
 
         # NOTE: cache_context is now built dynamically for each node in the execution loop
         # This ensures it reflects the current state of the context (which gets updated after each node)
