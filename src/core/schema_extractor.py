@@ -288,6 +288,7 @@ def build_cache_context(context: Dict[str, Any]) -> Dict[str, Any]:
     - input_schema: Data structure (for semantic matching)
     - config: Credential flags (for filtering)
     - insights: Context insights (from InputAnalyzer)
+    - analyzed_keys: Data analysis results from DataAnalyzer (if executed)
 
     Args:
         context: Full workflow context
@@ -297,7 +298,8 @@ def build_cache_context(context: Dict[str, Any]) -> Dict[str, Any]:
         {
             "input_schema": {...},
             "config": {...},
-            "insights": [...]
+            "insights": [...],
+            "analyzed_keys": {...}  # From _analyzed_keys if present
         }
 
     Example:
@@ -305,7 +307,10 @@ def build_cache_context(context: Dict[str, Any]) -> Dict[str, Any]:
         ...     "client_slug": "acme",
         ...     "db_password": "secret123",
         ...     "invoice_pdf": "JVBERi0...",
-        ...     "database_schemas": {...}
+        ...     "database_schemas": {...},
+        ...     "_analyzed_keys": {
+        ...         "invoice_pdf": {"analysis": {"pdf_type": "scanned", "needs_ocr": true}}
+        ...     }
         ... }
         >>> cache_ctx = build_cache_context(context)
         >>> cache_ctx
@@ -318,12 +323,18 @@ def build_cache_context(context: Dict[str, Any]) -> Dict[str, Any]:
                 "has_client_slug": True,
                 "has_db_password": True
             },
-            "insights": []
+            "insights": [],
+            "analyzed_keys": {
+                "invoice_pdf": {"analysis": {"pdf_type": "scanned", "needs_ocr": true}}
+            }
         }
     """
     input_schema = {}
     config = {}
     insights = []
+
+    # Extract _analyzed_keys if present (from DataAnalyzer)
+    analyzed_keys = context.get('_analyzed_keys', {})
 
     for key, value in context.items():
         # Skip internal fields
@@ -345,7 +356,8 @@ def build_cache_context(context: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "input_schema": input_schema,
         "config": config,
-        "insights": insights  # Will be populated by GraphEngine
+        "insights": insights,  # Will be populated by GraphEngine
+        "analyzed_keys": analyzed_keys  # Include analyzed_keys for semantic cache
     }
 
 

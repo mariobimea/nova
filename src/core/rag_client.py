@@ -341,7 +341,8 @@ class SemanticCodeCacheClient:
         node_action: str,
         node_description: str,
         libraries_used: List[str],
-        required_keys: Optional[List[str]] = None
+        required_keys: Optional[List[str]] = None,
+        analyzed_keys: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
         Save successful code execution to semantic cache.
@@ -356,6 +357,7 @@ class SemanticCodeCacheClient:
             node_description: Description from workflow node
             libraries_used: List of libraries imported in code
             required_keys: Keys that the code actually uses (for validation)
+            analyzed_keys: Data analysis results from DataAnalyzer (if executed)
 
         Returns:
             True if saved successfully, False otherwise
@@ -370,7 +372,8 @@ class SemanticCodeCacheClient:
                 node_action="extract_pdf",
                 node_description="Extract invoice text",
                 libraries_used=["fitz", "base64"],
-                required_keys=["email_user", "email_password"]
+                required_keys=["email_user", "email_password"],
+                analyzed_keys={"attachments": {"analysis": {"pdf_type": "scanned"}}}
             )
         """
         try:
@@ -392,6 +395,10 @@ class SemanticCodeCacheClient:
             # Add required_keys if provided
             if required_keys is not None:
                 payload["metadata"]["required_keys"] = required_keys
+
+            # Add analyzed_keys if provided
+            if analyzed_keys is not None and analyzed_keys:
+                payload["analyzed_keys"] = analyzed_keys
 
             response = self.session.post(
                 f"{self.base_url}/code/save",

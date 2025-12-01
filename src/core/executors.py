@@ -796,19 +796,32 @@ class CachedExecutor(ExecutorStrategy):
         cache_context: Dict[str, Any]
     ) -> str:
         """
-        Build semantic search query from task and input schema.
+        Build semantic search query from task, input schema, and analyzed keys.
 
-        Simplified to only use:
+        Uses:
         - Prompt (task description)
         - Full input schema (no filtering)
+        - Analyzed keys (if Data Analyzer was executed)
+
+        The analyzed_keys include insights from Data Analyzer that help
+        differentiate similar tasks requiring different code strategies
+        (e.g., OCR vs text extraction for PDFs).
 
         Args:
             task: Natural language task/prompt
             node: Optional node dictionary (unused now)
-            cache_context: Cache context from GraphEngine
+            cache_context: Cache context from GraphEngine containing:
+                - input_schema: Full input schema
+                - analyzed_keys: Results from Data Analyzer (if executed)
 
         Returns:
             Formatted search query string
+
+        Example:
+            With analyzed_keys:
+            "Prompt: Extract text from PDF
+             Input Schema: {attachments: [...]}
+             Data Insights: {attachments: {analysis: {pdf_type: 'scanned', needs_ocr: true}}}"
         """
         import json
 
@@ -822,6 +835,13 @@ class CachedExecutor(ExecutorStrategy):
         if input_schema:
             schema_str = json.dumps(input_schema, indent=2, sort_keys=True)
             parts.append(f"Input Schema:\n{schema_str}")
+
+        # Analyzed keys (if Data Analyzer was executed)
+        analyzed_keys = cache_context.get('analyzed_keys', {})
+        if analyzed_keys:
+            analyzed_str = json.dumps(analyzed_keys, indent=2, sort_keys=True)
+            parts.append(f"Data Insights:\n{analyzed_str}")
+            logger.debug(f"Including analyzed_keys in semantic query: {list(analyzed_keys.keys())}")
 
         return "\n\n".join(parts)
 
@@ -1040,8 +1060,13 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
             # Get FULL input schema (no filtering)
             full_input_schema = cache_context.get('input_schema', {})
 
+            # Get analyzed_keys if Data Analyzer was executed
+            analyzed_keys = cache_context.get('analyzed_keys', {})
+
             logger.debug(f"Required keys extracted from code: {required_keys}")
             logger.debug(f"Saving with FULL input_schema: {list(full_input_schema.keys())}")
+            if analyzed_keys:
+                logger.debug(f"Saving with analyzed_keys: {list(analyzed_keys.keys())}")
 
             # Save to cache
             success = self.semantic_cache.save_code(
@@ -1053,7 +1078,8 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
                 node_action=node.get('id', 'unknown') if node else 'unknown',
                 node_description=node.get('description', task[:100]) if node else task[:100],
                 libraries_used=libraries_used,
-                required_keys=required_keys  # Save for validation later
+                required_keys=required_keys,  # Save for validation later
+                analyzed_keys=analyzed_keys  # Include DataAnalyzer results if present
             )
 
             if success:
