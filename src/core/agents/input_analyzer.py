@@ -131,6 +131,33 @@ class InputAnalyzerAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
+    def _is_binary_string(self, value: str) -> bool:
+        """
+        Detecta si un string es binario/base64 vs texto legible.
+
+        Args:
+            value: String a analizar
+
+        Returns:
+            True si es binario/base64, False si es texto legible
+        """
+        # Sample primeros 500 chars para evitar analizar strings gigantes
+        sample = value[:500]
+
+        # 1. Detectar base64 (PDFs, imágenes en base64)
+        base64_chars = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
+        if len(sample) > 100:
+            base64_ratio = sum(c in base64_chars for c in sample) / len(sample)
+            if base64_ratio > 0.95:  # >95% son caracteres base64
+                return True
+
+        # 2. Detectar caracteres no imprimibles (binarios)
+        printable_ratio = sum(c.isprintable() or c.isspace() for c in sample) / len(sample)
+        if printable_ratio < 0.80:  # <80% imprimibles = probablemente binario
+            return True
+
+        return False
+
     def _summarize_context(self, context: Dict) -> Dict:
         """
         Resume el contexto para el prompt (evita enviar data muy grande).
@@ -160,8 +187,13 @@ class InputAnalyzerAgent(BaseAgent):
 
             if isinstance(value, str):
                 if len(value) > 200:
-                    # Truncar strings largos (PDFs en base64, emails, etc.)
-                    summary[key] = f"<string: {len(value)} chars>"
+                    # Detectar si es binario/base64 o texto legible
+                    if self._is_binary_string(value):
+                        # Binario/base64: truncar
+                        summary[key] = f"<string: {len(value)} chars>"
+                    else:
+                        # Texto legible: enviar completo para que LLM lo analice
+                        summary[key] = value
                 else:
                     # Mantener valores cortos completos
                     summary[key] = value
