@@ -26,6 +26,7 @@ from .code_generator import CodeGeneratorAgent
 from .code_validator import CodeValidatorAgent
 from .output_validator import OutputValidatorAgent
 from .analysis_validator import AnalysisValidatorAgent
+from .config_keys import filter_config_keys
 from ..e2b.executor import E2BExecutor
 from ..context import ContextManager
 
@@ -230,10 +231,21 @@ class MultiAgentOrchestrator:
 
         try:
             # 2. InputAnalyzer (UNA SOLA VEZ)
-            self.logger.info("📊 Ejecutando InputAnalyzer...")
+            # 🔥 NUEVO: Filtrar config keys antes de pasar al InputAnalyzer
+            # El InputAnalyzer solo necesita ver DATA, no configuración
+            filtered_context = filter_config_keys(context_state.current)
+            self.logger.info(f"📊 Ejecutando InputAnalyzer...")
+            self.logger.info(f"   Context keys: {len(context_state.current)} total, {len(filtered_context)} after filtering config")
+
+            # Crear un ContextState filtrado solo para InputAnalyzer
+            filtered_context_state = ContextState(
+                initial=filtered_context.copy(),
+                current=filtered_context.copy()
+            )
+
             input_analysis = await self.input_analyzer.execute(
                 task=task,
-                context_state=context_state,
+                context_state=filtered_context_state,
                 context_summary=context_manager.get_summary()  # ⬅️ NUEVO: Pasar summary
             )
 
@@ -268,9 +280,20 @@ class MultiAgentOrchestrator:
 
                     try:
                         # 3.1 DataAnalyzer genera código de análisis
+                        # 🔥 NUEVO: Filtrar config keys antes de pasar al DataAnalyzer
+                        # El DataAnalyzer solo necesita analizar DATA opaca, no configuración
+                        filtered_context_data = filter_config_keys(context_state.current)
                         self.logger.info("💻 Generando código de análisis...")
+                        self.logger.info(f"   Context keys: {len(context_state.current)} total, {len(filtered_context_data)} after filtering config")
+
+                        # Crear un ContextState filtrado solo para DataAnalyzer
+                        filtered_context_state_data = ContextState(
+                            initial=filtered_context_data.copy(),
+                            current=filtered_context_data.copy()
+                        )
+
                         data_analysis = await self.data_analyzer.execute(
-                            context_state=context_state,
+                            context_state=filtered_context_state_data,
                             context_summary=context_manager.get_summary(),  # ⬅️ NUEVO: Pasar summary
                             error_history=analysis_errors
                         )
@@ -452,6 +475,12 @@ class MultiAgentOrchestrator:
                         analysis_success = True
                         context_state.data_insights = insights
 
+                        # 🔥 DEBUG: Verificar que los insights se asignaron correctamente
+                        self.logger.info(f"🔍 DEBUG - Asignando insights al context_state")
+                        self.logger.info(f"   Insights type: {type(insights)}")
+                        self.logger.info(f"   Insights keys: {list(insights.keys()) if isinstance(insights, dict) else 'not a dict'}")
+                        self.logger.info(f"   context_state.data_insights is now: {context_state.data_insights is not None}")
+
                         # 🔥 NUEVO: Guardar el reasoning del AnalysisValidator
                         # Esto le da al CodeGenerator contexto sobre QUÉ SIGNIFICAN los insights
                         context_state.analysis_validation = {
@@ -521,10 +550,19 @@ class MultiAgentOrchestrator:
 
                 try:
                     # 4.1 CodeGenerator
+                    # ✅ CodeGenerator recibe el contexto COMPLETO (sin filtrar)
+                    # Necesita ver config (schemas, credentials) para generar código correcto
                     self.logger.info("💻 Generando código...")
+
+                    # 🔥 DEBUG: Verificar si los insights están disponibles
+                    self.logger.info(f"🔍 DEBUG - context_state.data_insights: {context_state.data_insights is not None}")
+                    if context_state.data_insights:
+                        self.logger.info(f"   Insights keys: {list(context_state.data_insights.keys())}")
+                    self.logger.info(f"🔍 DEBUG - context_state.analysis_validation: {context_state.analysis_validation is not None}")
+
                     code_gen = await self.code_generator.execute(
                         task=task,
-                        context_state=context_state,
+                        context_state=context_state,  # ✅ Contexto completo (NO filtrado)
                         context_summary=context_manager.get_summary(),  # 🔥 NUEVO: Pasar Context Summary
                         error_history=execution_state.errors,
                         node_type=node_type,  # Pass node type to code generator

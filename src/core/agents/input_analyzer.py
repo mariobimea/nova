@@ -174,7 +174,8 @@ class InputAnalyzerAgent(BaseAgent):
             "database_schema",   # Variante singular
             "db_schemas",        # Otra variante
             "schema",            # Schema genérico
-            "metadata"           # Metadata estructural
+            "metadata",          # Metadata estructural
+            "_analyzed_keys"     # 🔥 NUEVO: Para que el LLM vea qué ya fue analizado
         }
 
         summary = {}
