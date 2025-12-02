@@ -113,22 +113,35 @@ class CodeGeneratorAgent(BaseAgent):
             # El config_context se pasa completo (database_schemas, credenciales, etc.)
             combined_context = {**functional_context, **config_context}
 
-            # 🔍 DEBUG: Log extracted_pdf_text length if present
-            if 'extracted_pdf_text' in combined_context:
-                text_length = len(combined_context['extracted_pdf_text'])
-                text_preview = combined_context['extracted_pdf_text'][:200]
-                self.logger.info(f"🔍 DEBUG - CodeGenerator received 'extracted_pdf_text': {text_length} chars")
+            # 🔍 DEBUG: Mostrar todas las keys y sus valores
+            self.logger.info(f"🔍 DEBUG - Keys in functional_context: {list(functional_context.keys())}")
+            for key in functional_context:
+                value = functional_context[key]
+                if isinstance(value, str):
+                    self.logger.info(f"   - {key}: {type(value).__name__} of {len(value)} chars")
+                    if len(value) < 100:
+                        self.logger.info(f"     Value: {value}")
+                    else:
+                        self.logger.info(f"     Preview: {value[:100]}...")
+                else:
+                    self.logger.info(f"   - {key}: {type(value).__name__}")
+
+            # 🔍 DEBUG: Log extracted_text length if present (key correcta!)
+            if 'extracted_text' in combined_context:
+                text_length = len(combined_context['extracted_text'])
+                text_preview = combined_context['extracted_text'][:200]
+                self.logger.info(f"🔍 DEBUG - CodeGenerator received 'extracted_text': {text_length} chars")
                 self.logger.info(f"🔍 DEBUG - Text preview: {text_preview}...")
                 # Check if it contains the expected total
-                if '1.657,83' in combined_context['extracted_pdf_text']:
+                if '1.657,83' in combined_context['extracted_text']:
                     self.logger.info("✅ DEBUG - Text contains '1.657,83 €' (expected total)")
                 else:
                     self.logger.warning("⚠️ DEBUG - Text does NOT contain '1.657,83 €'")
-                if 'TOTAL' in combined_context['extracted_pdf_text']:
+                if 'TOTAL' in combined_context['extracted_text']:
                     self.logger.info("✅ DEBUG - Text contains 'TOTAL'")
                     # Show context around TOTAL
                     import re
-                    total_matches = list(re.finditer(r'.{0,50}TOTAL.{0,50}', combined_context['extracted_pdf_text']))
+                    total_matches = list(re.finditer(r'.{0,50}TOTAL.{0,50}', combined_context['extracted_text']))
                     self.logger.info(f"🔍 DEBUG - Found {len(total_matches)} 'TOTAL' occurrences:")
                     for i, match in enumerate(total_matches[:5]):  # Show first 5
                         self.logger.info(f"   [{i+1}] {match.group()}")
