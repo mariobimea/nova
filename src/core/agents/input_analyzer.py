@@ -134,39 +134,37 @@ Las keys listadas arriba YA FUERON ANALIZADAS en nodos anteriores.
 NO necesitas volver a analizarlas. Solo enfócate en keys NUEVAS que no aparecen en esta lista.
 """
 
-        return f"""Tu tarea: Decidir si necesitamos analizar la estructura del CONTEXTO ACTUAL antes de resolver la tarea.
-
-⚠️ IMPORTANTE: Analiza el CONTEXTO ACTUAL, NO lo que la tarea va a generar.
+        return f"""Tu tarea: Decidir si necesitamos analizar data OPACA (binaria/base64) antes de resolver la tarea.
 
 Tarea a resolver: {task}
 
-Contexto funcional disponible AHORA (ya truncado para tu lectura):
+Contexto funcional disponible:
 {json.dumps(functional_context, indent=2, ensure_ascii=False)}
 {analyzed_keys_section}
 
-Check if there are unanalyzed data sources in the functional context.
-If ANY unanalyzed data exists → needs_analysis = True
-
-Devuelve JSON con esta estructura exacta:
+Devuelve JSON:
 {{
   "needs_analysis": true/false,
   "complexity": "simple" | "medium" | "complex",
   "reasoning": "Por qué decidiste esto"
 }}
 
-✅ Necesitas análisis (needs_analysis=true) si hay data SIN analizar:
-- PDFs truncados como "<base64 PDF: N chars>" que NO están en analyzed_keys
-- Imágenes truncadas como "<base64 image: N chars>" que NO están en analyzed_keys
-- CSVs truncados como "<CSV data: N chars>" que NO están en analyzed_keys
-- Estructuras complejas (dict, list) que NO están en analyzed_keys
+✅ needs_analysis=TRUE solo si hay data OPACA que NO está en analyzed_keys:
+- PDFs en base64 (marcados como "<base64 PDF: N chars>")
+- Imágenes en base64 (marcados como "<base64 image: N chars>")
+- Archivos binarios que necesitan decodificarse
 
-❌ NO necesitas análisis (needs_analysis=false) si:
-- TODAS las keys con data opaca YA están en analyzed_keys
-- Solo hay valores simples (strings cortos, números, booleans)
-- La data es texto legible (no binario/base64)
+❌ needs_analysis=FALSE si:
+- La data ya está en analyzed_keys (ya fue analizada)
+- El texto ya es legible (no necesita decodificación)
+- Solo hay strings, números, booleans normales
+- Ya tienes texto extraído visible en el contexto
 
-Complejidad (basada en la TAREA, no en el contexto):
-- "simple": Tarea trivial (1-2 pasos obvios)
-- "medium": Requiere lógica moderada (3-5 pasos)
-- "complex": Requiere múltiples pasos complejos (>5 pasos)
+⚠️ IMPORTANTE: Si el contexto ya tiene texto legible (extracted_text, ocr_text, etc.), NO necesitas análisis.
+El análisis es SOLO para decodificar data binaria/base64, no para texto que ya puedes leer.
+
+Complejidad (basada en la TAREA):
+- "simple": 1-2 pasos
+- "medium": 3-5 pasos
+- "complex": >5 pasos
 """
