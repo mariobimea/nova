@@ -41,13 +41,16 @@ class ExecutionState:
         """Registra el tiempo de ejecución de un agente"""
         self.timings[agent_name] = duration_ms
 
-    def add_error(self, stage: str, error: str):
-        """Registra un error en el historial"""
-        self.errors.append({
+    def add_error(self, stage: str, error: str, failed_code: str = None):
+        """Registra un error en el historial, opcionalmente con el código que falló"""
+        error_entry = {
             "stage": stage,
             "error": error,
             "attempt": self.attempts
-        })
+        }
+        if failed_code:
+            error_entry["failed_code"] = failed_code
+        self.errors.append(error_entry)
 
     def get_total_time_ms(self) -> float:
         """Calcula el tiempo total de ejecución"""

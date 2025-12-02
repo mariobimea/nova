@@ -285,10 +285,25 @@ Los siguientes insights fueron obtenidos al analizar la data en nodos anteriores
 
         # Agregar errores previos si es un retry
         if error_history:
-            error_history_json = json.dumps(error_history, indent=2)
             prompt += """
 **⚠️ ERRORES PREVIOS (CORRÍGELOS):**
-""" + error_history_json + """
+"""
+            for i, err in enumerate(error_history, 1):
+                prompt += f"""
+--- Error {i} (intento {err.get('attempt', '?')}, etapa: {err.get('stage', '?')}) ---
+**Mensaje de error:**
+{err.get('error', 'Sin mensaje')}
+"""
+                # Si hay código fallido, mostrarlo
+                if err.get('failed_code'):
+                    prompt += f"""
+**Código que falló:**
+```python
+{err.get('failed_code')}
+```
+"""
+            prompt += """
+⚠️ IMPORTANTE: Analiza el código anterior y corrige los errores específicos.
 """
 
         prompt += """

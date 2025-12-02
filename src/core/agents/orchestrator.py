@@ -642,7 +642,7 @@ class MultiAgentOrchestrator:
                         # Retry con feedback del validator
                         error_msg = f"Código inválido: {', '.join(code_val.data['errors'])}"
                         self.logger.warning(f"⚠️ {error_msg}")
-                        execution_state.add_error("code_validation", error_msg)
+                        execution_state.add_error("code_validation", error_msg, failed_code=code_gen.data["code"])
                         continue
 
                     # 4.3 E2B Execution
@@ -676,7 +676,8 @@ class MultiAgentOrchestrator:
                             # Agregar error detallado al historial para feedback al CodeGenerator
                             execution_state.add_error(
                                 "execution",
-                                f"{error_msg}\n\nStderr:\n{stderr}\n\nStdout:\n{stdout}"
+                                f"{error_msg}\n\nStderr:\n{stderr}\n\nStdout:\n{stdout}",
+                                failed_code=code_gen.data["code"]
                             )
 
                             e2b_time_ms = (time.time() - e2b_start) * 1000
@@ -776,7 +777,7 @@ class MultiAgentOrchestrator:
                     except Exception as e:
                         error_msg = f"Error en E2B: {str(e)}"
                         self.logger.error(f"❌ {error_msg}")
-                        execution_state.add_error("execution", error_msg)
+                        execution_state.add_error("execution", error_msg, failed_code=code_gen.data["code"])
 
                         e2b_time_ms = (time.time() - e2b_start) * 1000
 
@@ -862,7 +863,7 @@ class MultiAgentOrchestrator:
                             error_msg += f"\n\n**Error de Python detectado:**\n{python_error}"
                             self.logger.error(f"🐍 Python error: {python_error}")
 
-                        execution_state.add_error("output_validation", error_msg)
+                        execution_state.add_error("output_validation", error_msg, failed_code=code_gen.data["code"])
                         continue
 
                     # ¡ÉXITO!
