@@ -225,14 +225,6 @@ Los siguientes insights fueron obtenidos al analizar la data en nodos anteriores
 """ + insights_json + """
 
 ⚠️ **MUY IMPORTANTE:** Estos insights son CRUCIALES para elegir la estrategia correcta:
-- Si ves `has_text: false` en un PDF → Usa Google Cloud Vision OCR (no PyMuPDF)
-- Si ves `pages: N` → Sabes cuántas páginas procesar
-- Si ves `type: "pdf_scanned"` → Es un PDF escaneado sin capa de texto
-- Si ves `attachment_count: 0` → No intentes procesar attachments inexistentes
-
-**Ejemplos de uso:**
-- Si `has_text_layer: false` → Usa Google Cloud Vision API para extraer texto de PDF escaneado
-- Si `type: image` con `has_text: false` → Usa Google Cloud Vision OCR según la tarea
 - Analiza esta información ANTES de elegir tu estrategia de implementación
 """
 
@@ -259,26 +251,7 @@ Los siguientes insights fueron obtenidos al analizar la data en nodos anteriores
    - Para GUARDAR archivos: encode con base64 → context['file_data'] = base64.b64encode(bytes).decode()
    - Para LEER archivos: decode → bytes = base64.b64decode(context['file_data'])
 
-**🔑 CREDENCIALES (Google Cloud Vision, etc.):**
-- Las credenciales están disponibles en el `context`, NO en `os.environ`
-- Para Google Cloud Vision: Usa `context.get('GCP_SERVICE_ACCOUNT_JSON')` (NO `os.environ.get()`)
-- Ejemplo de autenticación correcta:
-  ```python
-  import json
-  from google.cloud import vision
-  from google.oauth2 import service_account
 
-  # ✅ CORRECTO: Obtener credenciales desde context
-  creds_json = context.get('GCP_SERVICE_ACCOUNT_JSON')
-  if not creds_json:
-      raise Exception("Google Cloud Vision credentials not found in context")
-
-  # Parsear y crear credenciales
-  creds_dict = json.loads(creds_json)
-  credentials = service_account.Credentials.from_service_account_info(creds_dict)
-  client = vision.ImageAnnotatorClient(credentials=credentials)
-  ```
-- ❌ INCORRECTO: `os.environ.get('GCP_SERVICE_ACCOUNT_JSON')` (no disponible en E2B sandbox)
 """
 
         # Add special instructions for DecisionNode
