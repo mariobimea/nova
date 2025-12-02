@@ -10,6 +10,7 @@ from typing import Dict, Type, Optional
 
 from .providers.model_provider import ModelProvider
 from .providers.openai_provider import OpenAIProvider
+from .providers.anthropic_provider import AnthropicProvider
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +50,16 @@ class ModelRegistry:
         "mini": (OpenAIProvider, "gpt-4o-mini"),
         "codex": (OpenAIProvider, "gpt-5-codex"),
 
-        # Future: Anthropic models
-        # "claude-haiku-4-5": (AnthropicProvider, "claude-haiku-4-5"),
-        # "haiku": (AnthropicProvider, "claude-haiku-4-5"),
-        # "claude-sonnet-4-5": (AnthropicProvider, "claude-sonnet-4-5"),
-        # "sonnet": (AnthropicProvider, "claude-sonnet-4-5"),
+        # Anthropic models (Claude)
+        "claude-sonnet-4-5": (AnthropicProvider, "claude-sonnet-4-5"),
+        "claude-haiku-4-5": (AnthropicProvider, "claude-haiku-4-5"),
+        "claude-opus-4-5": (AnthropicProvider, "claude-opus-4-5"),
+
+        # Anthropic aliases (user-friendly)
+        "sonnet": (AnthropicProvider, "claude-sonnet-4-5"),
+        "haiku": (AnthropicProvider, "claude-haiku-4-5"),
+        "opus": (AnthropicProvider, "claude-opus-4-5"),
+        "claude": (AnthropicProvider, "claude-sonnet-4-5"),  # default Claude = Sonnet
     }
 
     # Cache for provider instances (avoid recreating)

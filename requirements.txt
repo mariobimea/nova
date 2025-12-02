@@ -30,6 +30,7 @@ e2b==2.5.0
 
 # AI Code Generation
 openai==1.109.1
+anthropic>=0.64.0
 
 # HTTP Client (for RAG service communication)
 # Already included above: requests==2.32.5
