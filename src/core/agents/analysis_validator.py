@@ -30,18 +30,20 @@ class AnalysisValidatorAgent(BaseAgent):
     async def execute(
         self,
         task: str,
+        functional_context_before: Dict,
         insights: Dict,
-        context_schema: Dict,
-        analysis_code: str = None
+        analysis_code: str,
+        execution_result: Dict
     ) -> AgentResponse:
         """
         Valida que los insights sean útiles.
 
         Args:
             task: Tarea original a resolver
+            functional_context_before: Contexto funcional ANTES del análisis (truncado)
             insights: Insights generados por DataAnalyzer
-            context_schema: Schema del contexto original
-            analysis_code: Código de análisis ejecutado (para debugging)
+            analysis_code: Código de análisis ejecutado
+            execution_result: Resultado completo de la ejecución E2B
 
         Returns:
             AgentResponse con:
@@ -56,7 +58,13 @@ class AnalysisValidatorAgent(BaseAgent):
             start_time = time.time()
 
             # Construir prompt
-            prompt = self._build_prompt(task, insights, context_schema, analysis_code)
+            prompt = self._build_prompt(
+                task,
+                functional_context_before,
+                insights,
+                analysis_code,
+                execution_result
+            )
 
             # Llamar a OpenAI
             response = await self.client.chat.completions.create(
@@ -121,36 +129,44 @@ class AnalysisValidatorAgent(BaseAgent):
     def _build_prompt(
         self,
         task: str,
+        functional_context_before: Dict,
         insights: Dict,
-        context_schema: Dict,
-        analysis_code: str = None
+        analysis_code: str,
+        execution_result: Dict
     ) -> str:
         """Construye el prompt para validación"""
+
+        # Mostrar solo primeras/últimas líneas del código
+        code_lines = analysis_code.split("\n")
+        if len(code_lines) > 20:
+            code_preview = "\n".join(code_lines[:10]) + "\n...\n" + "\n".join(code_lines[-5:])
+        else:
+            code_preview = analysis_code
+
+        # Extraer info relevante del execution_result
+        execution_status = "success" if execution_result.get("success") else "failed"
+        execution_error = execution_result.get("error", "")
+        execution_stdout = execution_result.get("_stdout", "")[:500]  # Primeros 500 chars
 
         prompt = f"""Tu trabajo: Validar si los insights generados son útiles para resolver la tarea.
 
 **Tarea original:** {task}
 
-**Contexto schema:**
-{json.dumps(context_schema, indent=2, ensure_ascii=False)}
+**Contexto funcional (antes del análisis):**
+{json.dumps(functional_context_before, indent=2, ensure_ascii=False)}
 
 **Insights generados:**
 {json.dumps(insights, indent=2, ensure_ascii=False)}
-"""
 
-        if analysis_code:
-            # Mostrar solo primeras/últimas líneas del código
-            code_lines = analysis_code.split("\n")
-            if len(code_lines) > 20:
-                code_preview = "\n".join(code_lines[:10]) + "\n...\n" + "\n".join(code_lines[-5:])
-            else:
-                code_preview = analysis_code
-
-            prompt += f"""
 **Código de análisis ejecutado:**
 ```python
 {code_preview}
 ```
+
+**Resultado de ejecución:**
+- Status: {execution_status}
+- Error: {execution_error if execution_error else "None"}
+- Stdout (primeros 500 chars): {execution_stdout}
 """
 
         prompt += """

@@ -37,13 +37,15 @@ async def test_output_validator_valid_result(output_validator, mock_openai_clien
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
     # Ejecutar
-    context_before = {"pdf_data": "..."}
-    context_after = {"pdf_data": "...", "total_amount": "1234.56"}
+    functional_context_before = {"pdf_data": "..."}
+    functional_context_after = {"pdf_data": "...", "total_amount": "1234.56"}
 
     response = await output_validator.execute(
         task="Extrae el total de la factura",
-        context_before=context_before,
-        context_after=context_after
+        functional_context_before=functional_context_before,
+        functional_context_after=functional_context_after,
+        code_executed="context['total_amount'] = '1234.56'",
+        execution_result={"success": True, "status": "completed"}
     )
 
     assert response.success is True
@@ -72,8 +74,10 @@ async def test_output_validator_no_changes(output_validator, mock_openai_client)
 
     response = await output_validator.execute(
         task="Procesa esto",
-        context_before=context,
-        context_after=context
+        functional_context_before=context,
+        functional_context_after=context,
+        code_executed="# No changes",
+        execution_result={"success": True, "status": "completed"}
     )
 
     assert response.success is True
@@ -97,13 +101,15 @@ async def test_output_validator_incomplete_task(output_validator, mock_openai_cl
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    context_before = {"data": "test"}
-    context_after = {"data": "test", "currency": "USD"}  # Falta el total
+    functional_context_before = {"data": "test"}
+    functional_context_after = {"data": "test", "currency": "USD"}  # Falta el total
 
     response = await output_validator.execute(
         task="Extrae el total y la moneda",
-        context_before=context_before,
-        context_after=context_after
+        functional_context_before=functional_context_before,
+        functional_context_after=functional_context_after,
+        code_executed="context['currency'] = 'USD'",
+        execution_result={"success": True, "status": "completed"}
     )
 
     assert response.success is True
@@ -120,8 +126,10 @@ async def test_output_validator_handles_openai_error(output_validator, mock_open
 
     response = await output_validator.execute(
         task="Test",
-        context_before={"a": 1},
-        context_after={"a": 1, "b": 2}
+        functional_context_before={"a": 1},
+        functional_context_after={"a": 1, "b": 2},
+        code_executed="context['b'] = 2",
+        execution_result={"success": True, "status": "completed"}
     )
 
     assert response.success is False

@@ -17,8 +17,6 @@ import time
 from openai import AsyncOpenAI
 
 from .base import BaseAgent, AgentResponse
-from .state import ContextState
-from ..context_summary import ContextSummary
 from ..integrations.rag_client import RAGClient
 
 
@@ -82,8 +80,9 @@ class CodeGeneratorAgent(BaseAgent):
     async def execute(
         self,
         task: str,
-        context_state: ContextState,
-        context_summary: Optional[ContextSummary] = None,
+        functional_context: Dict,
+        config_context: Dict,
+        accumulated_insights: Dict,
         error_history: List[Dict] = None,
         node_type: Optional[str] = None,
         node_id: Optional[str] = None
@@ -93,8 +92,9 @@ class CodeGeneratorAgent(BaseAgent):
 
         Args:
             task: Tarea a resolver
-            context_state: Estado del contexto
-            context_summary: Resumen del contexto con schema e historial (opcional)
+            functional_context: Contexto funcional (YA truncado, sin config ni metadata)
+            config_context: Contexto de configuración (credenciales, DB schemas, etc.)
+            accumulated_insights: Insights acumulados de TODOS los análisis previos
             error_history: Errores de intentos previos (para retry)
             node_type: Tipo de nodo ("action", "decision", etc.) - opcional
             node_id: ID del nodo (usado para DecisionNodes) - opcional
@@ -108,16 +108,19 @@ class CodeGeneratorAgent(BaseAgent):
         try:
             start_time = time.time()
 
+            # Combinar functional + config para el prompt
+            # El functional_context ya viene truncado
+            # El config_context se pasa completo (database_schemas, credenciales, etc.)
+            combined_context = {**functional_context, **config_context}
+
             # Construir prompt
             prompt = self._build_prompt(
                 task,
-                context_state.current,
-                context_state.data_insights,
+                combined_context,
+                accumulated_insights,
                 error_history or [],
                 node_type=node_type,
-                node_id=node_id,  # Pass node_id for DecisionNode key generation
-                analysis_validation=context_state.analysis_validation,  # 🔥 Pasar validation reasoning
-                context_summary=context_summary  # 🔥 NUEVO: Pasar Context Summary
+                node_id=node_id
             )
 
             # Llamar a OpenAI con tool calling
@@ -182,125 +185,22 @@ class CodeGeneratorAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
-    def _summarize_value(self, value, max_depth=4, current_depth=0):
-        """
-        Truncamiento inteligente: solo trunca data "opaca" (PDFs base64, CSVs largos, etc).
-        Preserva dicts/listas normales completos para que el LLM los pueda leer.
-
-        TRUNCA:
-        - Strings > 1000 chars (PDFs base64, CSVs largos, emails largos)
-        - Detecta y marca tipos específicos (PDF, imagen, CSV, etc)
-
-        NO TRUNCA:
-        - Strings < 500 chars
-        - Dicts/listas normales (hasta depth=4)
-        - Números, booleanos, None
-        """
-        # Prevent infinite recursion
-        if current_depth >= max_depth:
-            return f"<max depth reached: {type(value).__name__}>"
-
-        if isinstance(value, str):
-            # 1. Detectar PDFs en base64 (empiezan con "JVBERi")
-            if len(value) > 1000 and value.startswith("JVBERi"):
-                return f"<base64 PDF: {len(value)} chars, starts with JVBERi>"
-
-            # 2. Detectar imágenes PNG en base64 (empiezan con "iVBOR")
-            elif len(value) > 1000 and value.startswith("iVBOR"):
-                return f"<base64 image (PNG): {len(value)} chars, starts with iVBOR>"
-
-            # 3. Detectar imágenes JPEG en base64 (empiezan con "/9j/")
-            elif len(value) > 1000 and value.startswith("/9j/"):
-                return f"<base64 image (JPEG): {len(value)} chars, starts with /9j/>"
-
-            # 4. Detectar CSVs largos (tienen líneas con comas/tabs)
-            elif len(value) > 1000 and ("\n" in value and ("," in value or "\t" in value)):
-                line_count = value.count("\n")
-                return f"<CSV data: {len(value)} chars, ~{line_count} lines>"
-
-            # 5. Strings muy largos genéricos
-            elif len(value) > 1000:
-                return f"<long string: {len(value)} chars>"
-
-            # 6. Strings medianos (500-1000 chars) - mostrar preview
-            elif len(value) > 500:
-                return f"<string: {len(value)} chars, preview: {value[:100]}...>"
-
-            # 7. Strings cortos/normales - pasar completos
-            else:
-                return value
-
-        elif isinstance(value, (int, float, bool, type(None))):
-            # Números y booleanos siempre completos
-            return value
-
-        elif isinstance(value, bytes):
-            # Bytes - detectar formato si es posible
-            if value.startswith(b"%PDF"):
-                return f"<bytes PDF: {len(value)} bytes>"
-            elif value.startswith(b"\x89PNG"):
-                return f"<bytes PNG image: {len(value)} bytes>"
-            elif value.startswith(b"\xff\xd8\xff"):
-                return f"<bytes JPEG image: {len(value)} bytes>"
-            else:
-                return f"<bytes: {len(value)} bytes>"
-
-        elif isinstance(value, list):
-            if len(value) == 0:
-                return []
-
-            # ✅ CAMBIO CRÍTICO: Mostrar TODA la lista (no solo 3 items)
-            # Solo limitar si la lista es MUY grande (>100 items)
-            if len(value) > 100:
-                # Lista muy grande - mostrar primeros 5 items
-                summarized_items = []
-                for item in value[:5]:
-                    summarized_items.append(self._summarize_value(item, max_depth, current_depth + 1))
-                summarized_items.append(f"... (+{len(value)-5} more items)")
-                return summarized_items
-            else:
-                # Lista normal - mostrar COMPLETA
-                return [
-                    self._summarize_value(item, max_depth, current_depth + 1)
-                    for item in value
-                ]
-
-        elif isinstance(value, dict):
-            if len(value) == 0:
-                return {}
-
-            # ✅ CAMBIO CRÍTICO: Mostrar TODO el dict (no truncar)
-            # Recursivamente resumir valores pero mantener todas las keys
-            return {
-                k: self._summarize_value(v, max_depth, current_depth + 1)
-                for k, v in value.items()
-            }
-
-        else:
-            # Otros tipos desconocidos
-            return f"<{type(value).__name__}>"
+    # Método _summarize_value() eliminado - ahora se usa truncate_for_llm() del Orchestrator
 
     def _build_prompt(
         self,
         task: str,
         context: Dict,
-        data_insights: Optional[Dict],
+        accumulated_insights: Dict,
         error_history: List[Dict],
         node_type: Optional[str] = None,
-        node_id: Optional[str] = None,
-        analysis_validation: Optional[Dict] = None,
-        context_summary: Optional[ContextSummary] = None
+        node_id: Optional[str] = None
     ) -> str:
         """Construye el prompt para generación de código"""
 
-        # Schema del contexto (keys + tipos + valores de ejemplo)
-        # Use recursive summarization to handle nested structures
-        context_schema = {}
-        for key, value in context.items():
-            context_schema[key] = self._summarize_value(value)
-
-        # Serializar context_schema fuera del f-string para evitar conflicto con {}
-        context_schema_json = json.dumps(context_schema, indent=2)
+        # El contexto ya viene truncado por el Orchestrator
+        # Solo necesitamos serializarlo para el prompt
+        context_json = json.dumps(context, indent=2, ensure_ascii=False)
 
         prompt = f"""Genera código Python que resuelve esta tarea:
 
@@ -308,97 +208,32 @@ class CodeGeneratorAgent(BaseAgent):
 
 **Contexto disponible (variable 'context'):**
 La variable `context` es un diccionario que YA EXISTE con estas keys:
-""" + context_schema_json + """
+""" + context_json + """
 
-⚠️ IMPORTANTE: Este es solo el ESQUEMA del contexto (valores resumidos).
+⚠️ IMPORTANTE: Este es el ESQUEMA del contexto (valores ya truncados para tu lectura).
 NO copies estos valores al código. Usa `context['key']` para acceder a los valores reales.
 """
 
-        # 🔥 NUEVO: Agregar schema completo del Context Summary (si existe)
-        if context_summary and context_summary.context_schema:
-            schema_json = json.dumps(context_summary.context_schema, indent=2, ensure_ascii=False)
+        # Agregar insights acumulados (si existen)
+        if accumulated_insights:
+            insights_json = json.dumps(accumulated_insights, indent=2, ensure_ascii=False)
+            self.logger.info(f"📊 CodeGenerator recibe {len(accumulated_insights)} keys con insights acumulados")
             prompt += """
-**📚 Schema completo del contexto (historial de análisis):**
-El siguiente schema muestra todas las keys que han sido analizadas en nodos anteriores:
-""" + schema_json + """
-
-Este schema te ayuda a entender:
-- Qué keys ya fueron analizadas y cómo
-- La estructura completa de la data disponible
-- Relaciones entre diferentes keys del contexto
-
-**Historial de análisis:**
-"""
-            # Agregar historial de análisis
-            for entry in context_summary.analysis_history:
-                prompt += f"- Nodo '{entry.node_id}': analizó {', '.join(entry.analyzed_keys)}\n"
-
-            prompt += """
-Usa esta información para generar código que aproveche TODA la data disponible, no solo la que se acaba de analizar.
-
-"""
-            # 🔥 NUEVO: Extraer y mostrar TODOS los insights del schema (de nodos previos)
-            all_insights = {}
-            for key, schema_entry in context_summary.context_schema.items():
-                if isinstance(schema_entry, dict) and "insights" in schema_entry:
-                    all_insights[key] = schema_entry["insights"]
-
-            # 🔍 DEBUG: Log insights from previous nodes
-            self.logger.info(f"📊 Found {len(all_insights)} keys with insights from previous nodes: {list(all_insights.keys())}")
-
-            if all_insights:
-                all_insights_json = json.dumps(all_insights, indent=2, ensure_ascii=False)
-                prompt += """
-**🔍 Insights de análisis previos (de nodos anteriores):**
-Los siguientes insights fueron obtenidos al analizar la data en nodos previos.
+**🔍 Insights acumulados (análisis previos):**
+Los siguientes insights fueron obtenidos al analizar la data en nodos anteriores.
 ÚSALOS para tomar decisiones correctas sobre cómo procesar la data:
-""" + all_insights_json + """
+""" + insights_json + """
 
 ⚠️ **MUY IMPORTANTE:** Estos insights son CRUCIALES para elegir la estrategia correcta:
 - Si ves `has_text: false` en un PDF → Usa Google Cloud Vision OCR (no PyMuPDF)
 - Si ves `pages: N` → Sabes cuántas páginas procesar
 - Si ves `type: "pdf_scanned"` → Es un PDF escaneado sin capa de texto
-
-"""
-
-        # Agregar insights del nodo ACTUAL (si existen)
-        if data_insights:
-            data_insights_json = json.dumps(data_insights, indent=2)
-            prompt += """
-**Insights sobre la data (DataAnalyzer):**
-""" + data_insights_json + """
-"""
-
-        # 🔥 NUEVO: Agregar reasoning del AnalysisValidator
-        if analysis_validation:
-            reason = analysis_validation.get('reason', 'No reasoning available')
-            prompt += f"""
-**Análisis de los insights (AnalysisValidator):**
-{reason}
-"""
-
-            # Si hay suggestions, agregarlas
-            suggestions = analysis_validation.get('suggestions', [])
-            if suggestions:
-                suggestions_json = json.dumps(suggestions, indent=2, ensure_ascii=False)
-                prompt += """
-**Sugerencias para implementación:**
-""" + suggestions_json + """
-"""
-
-        # Continuar con el resto del prompt
-        if data_insights or analysis_validation:
-            prompt += """
-⚠️ **IMPORTANTE:** Los insights y su análisis proporcionan información CLAVE sobre la data.
-- Los insights (DataAnalyzer) describen QUÉ ES la data (tipo, estructura, características)
-- El análisis (AnalysisValidator) explica QUÉ SIGNIFICA y qué estrategia usar
-- ÚSALOS para elegir el enfoque correcto (qué librerías, qué métodos, qué flujo)
-- Analiza esta información ANTES de elegir tu estrategia de implementación
+- Si ves `attachment_count: 0` → No intentes procesar attachments inexistentes
 
 **Ejemplos de uso:**
 - Si `has_text_layer: false` → Usa Google Cloud Vision API para extraer texto de PDF escaneado
 - Si `type: image` con `has_text: false` → Usa Google Cloud Vision OCR según la tarea
-- Si `attachment_count: 0` → No intentes procesar attachments inexistentes
+- Analiza esta información ANTES de elegir tu estrategia de implementación
 """
 
         # Agregar errores previos si es un retry

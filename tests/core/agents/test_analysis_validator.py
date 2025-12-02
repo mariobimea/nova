@@ -37,19 +37,20 @@ async def test_analysis_validator_valid_pdf_insights(analysis_validator, mock_op
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    # Ejecutar
+    # Ejecutar con nueva firma
     response = await analysis_validator.execute(
         task="Extract text from PDF document",
+        functional_context_before={
+            "attachments": [{"data": "<base64 PDF>", "filename": "invoice.pdf"}]
+        },
         insights={
             "type": "pdf",
             "pages": 3,
             "has_text_layer": True,
             "filename": "invoice.pdf"
         },
-        context_schema={
-            "attachments": [{"data": "<base64 PDF>", "filename": "invoice.pdf"}]
-        },
-        analysis_code="import fitz..."
+        analysis_code="import fitz...",
+        execution_result={"success": True, "status": "completed"}
     )
 
     assert response.success is True
@@ -85,10 +86,12 @@ async def test_analysis_validator_invalid_unknown_type(analysis_validator, mock_
     # Ejecutar
     response = await analysis_validator.execute(
         task="Extract text from PDF",
-        insights={"type": "unknown"},
-        context_schema={
+        functional_context_before={
             "attachments": [{"data": "<base64 PDF>"}]
-        }
+        },
+        insights={"type": "unknown"},
+        analysis_code="# analysis code",
+        execution_result={"success": True, "status": "completed"}
     )
 
     assert response.success is True
@@ -124,10 +127,12 @@ async def test_analysis_validator_invalid_missing_metadata(analysis_validator, m
     # Ejecutar
     response = await analysis_validator.execute(
         task="Extract text from PDF",
-        insights={"type": "pdf"},  # Sin pages, has_text_layer, etc.
-        context_schema={
+        functional_context_before={
             "attachments": [{"data": "<base64 PDF>"}]
-        }
+        },
+        insights={"type": "pdf"},  # Sin pages, has_text_layer, etc.
+        analysis_code="# analysis code",
+        execution_result={"success": True, "status": "completed"}
     )
 
     assert response.success is True
@@ -161,11 +166,13 @@ async def test_analysis_validator_with_error_in_insights(analysis_validator, moc
     # Ejecutar
     response = await analysis_validator.execute(
         task="Analyze PDF",
+        functional_context_before={},
         insights={
             "type": "unknown",
             "error": "Could not parse PDF"
         },
-        context_schema={}
+        analysis_code="# failed analysis",
+        execution_result={"success": False, "error": "Could not parse PDF"}
     )
 
     assert response.success is True
@@ -184,8 +191,10 @@ async def test_analysis_validator_handles_ai_error(analysis_validator, mock_open
     # Ejecutar
     response = await analysis_validator.execute(
         task="Test",
+        functional_context_before={},
         insights={"type": "test"},
-        context_schema={}
+        analysis_code="# test code",
+        execution_result={"success": True}
     )
 
     assert response.success is False

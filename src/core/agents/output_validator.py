@@ -30,20 +30,20 @@ class OutputValidatorAgent(BaseAgent):
     async def execute(
         self,
         task: str,
-        context_before: Dict,
-        context_after: Dict,
-        generated_code: str = None,
-        execution_result: Dict = None  # 🔥 NUEVO: Info de ejecución E2B (stderr, stdout, status)
+        functional_context_before: Dict,
+        functional_context_after: Dict,
+        code_executed: str,
+        execution_result: Dict
     ) -> AgentResponse:
         """
         Valida semánticamente si la tarea se completó correctamente.
 
         Args:
             task: Tarea que se solicitó resolver
-            context_before: Contexto antes de la ejecución
-            context_after: Contexto después de la ejecución
-            generated_code: Código generado que se ejecutó (opcional, para debugging)
-            execution_result: Resultado de la ejecución en E2B (stderr, stdout, status)
+            functional_context_before: Contexto funcional ANTES (truncado, sin config ni metadata)
+            functional_context_after: Contexto funcional DESPUÉS (truncado, sin config ni metadata)
+            code_executed: Código que se ejecutó (para debugging)
+            execution_result: Resultado completo de la ejecución E2B (stderr, stdout, status, success)
 
         Returns:
             AgentResponse con:
@@ -57,17 +57,24 @@ class OutputValidatorAgent(BaseAgent):
             # 🔥 DEBUG: Log what OutputValidator received
             self.logger.info(f"🔍 DEBUG - OutputValidator received:")
             self.logger.info(f"   Task: {task[:100]}...")
-            self.logger.info(f"   context_before keys: {list(context_before.keys())}")
-            self.logger.info(f"   context_after keys: {list(context_after.keys())}")
-            self.logger.info(f"   context_after full: {context_after}")
+            self.logger.info(f"   functional_context_before keys: {list(functional_context_before.keys())}")
+            self.logger.info(f"   functional_context_after keys: {list(functional_context_after.keys())}")
+            self.logger.info(f"   functional_context_after full: {functional_context_after}")
 
             # Detectar cambios
-            changes = self._detect_changes(context_before, context_after)
+            changes = self._detect_changes(functional_context_before, functional_context_after)
 
             self.logger.info(f"🔍 DEBUG - Changes detected: {changes}")
 
             # Construir prompt
-            prompt = self._build_prompt(task, context_before, context_after, changes, generated_code, execution_result)
+            prompt = self._build_prompt(
+                task,
+                functional_context_before,
+                functional_context_after,
+                changes,
+                code_executed,
+                execution_result
+            )
 
             # Llamar a OpenAI
             response = await self.client.chat.completions.create(

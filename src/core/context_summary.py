@@ -134,6 +134,44 @@ class ContextSummary(BaseModel):
         analyzed_keys = self.get_analyzed_keys()
         return current_keys - analyzed_keys
 
+    def get_all_insights(self) -> Dict[str, Any]:
+        """
+        Extract ONLY insights from context_schema (for CodeGenerator).
+
+        This method extracts the 'insights' field from each entry in context_schema,
+        providing CodeGenerator with analyzed information about the data without
+        the full schema structure.
+
+        Returns:
+            Dict mapping keys to their insights
+
+        Example:
+            >>> summary.context_schema = {
+            ...     "pdf_data": {
+            ...         "type": "base64",
+            ...         "insights": {"has_text": False, "pages": 5}
+            ...     },
+            ...     "csv_data": {
+            ...         "type": "string",
+            ...         "insights": {"columns": ["name", "email"], "rows": 150}
+            ...     },
+            ...     "simple_value": {
+            ...         "type": "string"
+            ...         # No insights field
+            ...     }
+            ... }
+            >>> summary.get_all_insights()
+            {
+                "pdf_data": {"has_text": False, "pages": 5},
+                "csv_data": {"columns": ["name", "email"], "rows": 150}
+            }
+        """
+        insights = {}
+        for key, schema_entry in self.context_schema.items():
+            if isinstance(schema_entry, dict) and "insights" in schema_entry:
+                insights[key] = schema_entry["insights"]
+        return insights
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         return {

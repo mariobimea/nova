@@ -4,7 +4,6 @@ import pytest
 import json
 from unittest.mock import Mock, AsyncMock
 from src.core.agents.code_generator import CodeGeneratorAgent
-from src.core.agents.state import ContextState
 
 
 @pytest.fixture
@@ -35,15 +34,12 @@ context['sum'] = result
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    # Ejecutar
-    context_state = ContextState(
-        initial={"num1": 5, "num2": 10},
-        current={"num1": 5, "num2": 10}
-    )
-
+    # Ejecutar con nueva firma
     response = await code_generator.execute(
         task="Suma estos números",
-        context_state=context_state,
+        functional_context={"num1": 5, "num2": 10},
+        config_context={},
+        accumulated_insights={},
         error_history=[]
     )
 
@@ -63,18 +59,15 @@ async def test_code_generator_with_error_history(code_generator, mock_openai_cli
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    context_state = ContextState(
-        initial={"data": "test"},
-        current={"data": "test"}
-    )
-
     error_history = [
         {"stage": "code_validation", "errors": ["Variable 'x' no definida"]}
     ]
 
     response = await code_generator.execute(
         task="Test",
-        context_state=context_state,
+        functional_context={"data": "test"},
+        config_context={},
+        accumulated_insights={},
         error_history=error_history
     )
 
@@ -97,14 +90,11 @@ async def test_code_generator_extracts_code_from_markdown(code_generator, mock_o
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    context_state = ContextState(
-        initial={"data": "test"},
-        current={"data": "test"}
-    )
-
     response = await code_generator.execute(
         task="Test",
-        context_state=context_state
+        functional_context={"data": "test"},
+        config_context={},
+        accumulated_insights={}
     )
 
     assert response.success is True

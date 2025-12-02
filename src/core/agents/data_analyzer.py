@@ -13,14 +13,12 @@ Características:
     - Costo: ~$0.005 por intento + E2B execution
 """
 
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Set
 import json
 import time
 from openai import AsyncOpenAI
 
 from .base import BaseAgent, AgentResponse
-from .state import ContextState
-from ..context_summary import ContextSummary
 
 
 class DataAnalyzerAgent(BaseAgent):
@@ -34,21 +32,19 @@ class DataAnalyzerAgent(BaseAgent):
 
     async def execute(
         self,
-        context_state: ContextState,
-        context_summary: Optional[ContextSummary] = None,
+        functional_context: Dict,
+        analyzed_keys: Set[str],
         error_history: List[Dict] = None
     ) -> AgentResponse:
         """
         Genera código de análisis SOLO (no ejecuta E2B).
 
         Ahora con análisis incremental: solo analiza keys nuevas.
-
-        La ejecución en E2B ahora se hace en el orchestrator para mantener
-        el flujo consistente con CodeGenerator.
+        Recibe contexto funcional ya truncado por el Orchestrator.
 
         Args:
-            context_state: Estado del contexto con la data a analizar
-            context_summary: Resumen con historial de análisis (opcional)
+            functional_context: Contexto funcional (YA truncado, sin config ni metadata)
+            analyzed_keys: Set de keys que ya fueron analizadas en nodos previos
             error_history: Errores de intentos previos (para retry)
 
         Returns:
@@ -63,15 +59,10 @@ class DataAnalyzerAgent(BaseAgent):
         try:
             start_time = time.time()
 
-            # 1. Identificar keys ya analizadas
-            analyzed_keys = set()
-            if context_summary:
-                analyzed_keys = context_summary.get_analyzed_keys()
+            # 1. Identificar keys actuales
+            current_keys = set(functional_context.keys())
 
-            # 2. Identificar keys actuales
-            current_keys = set(context_state.current.keys())
-
-            # 3. Solo analizar keys NUEVAS
+            # 2. Solo analizar keys NUEVAS
             new_keys = current_keys - analyzed_keys
 
             if not new_keys:
@@ -92,17 +83,16 @@ class DataAnalyzerAgent(BaseAgent):
                     execution_time_ms=(time.time() - start_time) * 1000
                 )
 
-            # 4. Extraer solo las keys nuevas
-            new_context = {k: context_state.current[k] for k in new_keys if k in context_state.current}
+            # 3. Extraer solo las keys nuevas
+            new_context = {k: functional_context[k] for k in new_keys if k in functional_context}
 
             self.logger.info(f"🔍 Analyzing {len(new_keys)} new keys: {list(new_keys)}")
             self.logger.info(f"⏭️ Skipping {len(analyzed_keys)} already analyzed keys: {list(analyzed_keys)[:5]}...")
 
-            # 5. Generar código de análisis SOLO para keys nuevas
+            # 4. Generar código de análisis SOLO para keys nuevas
             analysis_code, ai_metadata = await self._generate_analysis_code(
                 new_context,
-                error_history or [],
-                context_summary=context_summary
+                error_history or []
             )
 
             execution_time_ms = (time.time() - start_time) * 1000
@@ -132,179 +122,30 @@ class DataAnalyzerAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
-    def _summarize_value(self, value, max_depth=4, current_depth=0, key_name=None):
-        """
-        Truncamiento inteligente: solo trunca data "opaca" (PDFs base64, CSVs largos, etc).
-        Preserva dicts/listas normales completos para que el LLM los pueda leer.
-
-        TRUNCA:
-        - Strings > 1000 chars (PDFs base64, CSVs largos, emails largos)
-        - Detecta y marca tipos específicos (PDF, imagen, CSV, etc)
-
-        NO TRUNCA:
-        - Strings < 500 chars
-        - Dicts/listas normales (hasta depth=4)
-        - Números, booleanos, None
-        - Keys críticas (database_schemas, workflow_config, etc)
-        """
-        # Keys que NUNCA se truncan (metadatos necesarios para CodeGenerator)
-        NEVER_TRUNCATE_KEYS = {
-            'database_schemas',  # Schema de tablas DB (necesario para generar SQL correcto)
-            'workflow_config',   # Configuración del workflow
-            'node_config',       # Configuración del nodo actual
-        }
-
-        # Si es una key crítica, pasar valor completo sin truncar
-        if key_name in NEVER_TRUNCATE_KEYS:
-            if isinstance(value, (dict, list)):
-                # Pasar completo pero seguir resumiendo valores internos
-                if isinstance(value, dict):
-                    return {
-                        k: self._summarize_value(v, max_depth, current_depth + 1, key_name=k)
-                        for k, v in value.items()
-                    }
-                else:  # list
-                    return [
-                        self._summarize_value(item, max_depth, current_depth + 1)
-                        for item in value
-                    ]
-            else:
-                # Pasar valor primitivo completo
-                return value
-
-        # Prevent infinite recursion
-        if current_depth >= max_depth:
-            return f"<max depth reached: {type(value).__name__}>"
-
-        if isinstance(value, str):
-            # 1. Detectar PDFs en base64 (empiezan con "JVBERi")
-            if len(value) > 1000 and value.startswith("JVBERi"):
-                return f"<base64 PDF: {len(value)} chars, starts with JVBERi>"
-
-            # 2. Detectar imágenes PNG en base64 (empiezan con "iVBOR")
-            elif len(value) > 1000 and value.startswith("iVBOR"):
-                return f"<base64 image (PNG): {len(value)} chars, starts with iVBOR>"
-
-            # 3. Detectar imágenes JPEG en base64 (empiezan con "/9j/")
-            elif len(value) > 1000 and value.startswith("/9j/"):
-                return f"<base64 image (JPEG): {len(value)} chars, starts with /9j/>"
-
-            # 4. Detectar CSVs largos (tienen líneas con comas/tabs)
-            elif len(value) > 1000 and ("\n" in value and ("," in value or "\t" in value)):
-                line_count = value.count("\n")
-                return f"<CSV data: {len(value)} chars, ~{line_count} lines>"
-
-            # 5. Strings muy largos genéricos
-            elif len(value) > 1000:
-                return f"<long string: {len(value)} chars>"
-
-            # 6. Strings medianos (500-1000 chars) - mostrar preview
-            elif len(value) > 500:
-                return f"<string: {len(value)} chars, preview: {value[:100]}...>"
-
-            # 7. Strings cortos/normales - pasar completos
-            else:
-                return value
-
-        elif isinstance(value, (int, float, bool, type(None))):
-            # Números y booleanos siempre completos
-            return value
-
-        elif isinstance(value, bytes):
-            # Bytes - detectar formato si es posible
-            if value.startswith(b"%PDF"):
-                return f"<bytes PDF: {len(value)} bytes>"
-            elif value.startswith(b"\x89PNG"):
-                return f"<bytes PNG image: {len(value)} bytes>"
-            elif value.startswith(b"\xff\xd8\xff"):
-                return f"<bytes JPEG image: {len(value)} bytes>"
-            else:
-                return f"<bytes: {len(value)} bytes>"
-
-        elif isinstance(value, list):
-            if len(value) == 0:
-                return []
-
-            # ✅ CAMBIO CRÍTICO: Mostrar TODA la lista (no solo 2 items)
-            # Solo limitar si la lista es MUY grande (>100 items)
-            if len(value) > 100:
-                # Lista muy grande - mostrar primeros 5 items
-                summarized_items = []
-                for item in value[:5]:
-                    summarized_items.append(self._summarize_value(item, max_depth, current_depth + 1))
-                summarized_items.append(f"... (+{len(value)-5} more items)")
-                return summarized_items
-            else:
-                # Lista normal - mostrar COMPLETA
-                return [
-                    self._summarize_value(item, max_depth, current_depth + 1)
-                    for item in value
-                ]
-
-        elif isinstance(value, dict):
-            if len(value) == 0:
-                return {}
-
-            # ✅ CAMBIO CRÍTICO: Mostrar TODO el dict (no truncar)
-            # Recursivamente resumir valores pero mantener todas las keys
-            return {
-                k: self._summarize_value(v, max_depth, current_depth + 1, key_name=k)
-                for k, v in value.items()
-            }
-
-        else:
-            # Otros tipos desconocidos
-            return f"<{type(value).__name__}>"
+    # Método _summarize_value() eliminado - ahora se usa truncate_for_llm() del Orchestrator
 
     async def _generate_analysis_code(
         self,
         context: Dict,
-        error_history: List[Dict],
-        context_summary: Optional[ContextSummary] = None
+        error_history: List[Dict]
     ) -> tuple[str, dict]:
         """
         Genera código Python que analiza la data.
 
         Args:
-            context: Contexto a analizar (solo keys nuevas)
+            context: Contexto a analizar (YA truncado, solo keys nuevas)
             error_history: Errores de intentos previos
-            context_summary: Resumen con schema de keys ya analizadas
 
         Returns:
             tuple: (code, ai_metadata) donde ai_metadata contiene tokens, costo, modelo
         """
 
-        # Preparar schema del contexto con estructura detallada
-        context_schema = {}
-        for key, value in context.items():
-            context_schema[key] = self._summarize_value(value, key_name=key)
-
-        # Serializar context_schema a JSON string (fuera del f-string para evitar problemas con {})
-        context_schema_json = json.dumps(context_schema, indent=2, ensure_ascii=False)
-
-        # Preparar schema previo (si existe)
-        previous_schema_section = ""
-        if context_summary and context_summary.context_schema:
-            previous_schema_json = json.dumps(context_summary.context_schema, indent=2, ensure_ascii=False)
-            previous_schema_section = f"""
-
-📚 **SCHEMA PREVIO (YA ANALIZADO, NO TOCAR):**
-```json
-{previous_schema_json}
-```
-
-Las keys arriba YA fueron analizadas en nodos anteriores.
-NO las analices de nuevo. Solo enfócate en las keys NUEVAS que ves abajo en el contexto actual.
-"""
+        # El contexto ya viene truncado por el Orchestrator
+        # Solo necesitamos serializarlo para el prompt
+        context_schema_json = json.dumps(context, indent=2, ensure_ascii=False)
 
         # Usar concatenación de strings en lugar de f-string para evitar conflicto con {} del JSON
         prompt = """Genera código Python que ANALIZA ÚNICAMENTE data "opaca" que el LLM no puede leer directamente.
-
-🎯 **TU ROL: Analizar SOLO data truncada (y solo data NUEVA)**"""
-
-        prompt += previous_schema_section
-
-        prompt += """
 
 🎯 **TU ROL: Analizar SOLO data truncada**
 

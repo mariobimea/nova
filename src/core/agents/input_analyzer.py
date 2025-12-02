@@ -13,14 +13,12 @@ Características:
     - Context-aware: Ve qué ya se analizó para evitar redundancia
 """
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 import json
 import time
 from openai import AsyncOpenAI
 
 from .base import BaseAgent, AgentResponse
-from .state import ContextState
-from ..context_summary import ContextSummary
 
 
 class InputAnalyzerAgent(BaseAgent):
@@ -34,16 +32,16 @@ class InputAnalyzerAgent(BaseAgent):
     async def execute(
         self,
         task: str,
-        context_state: ContextState,
-        context_summary: Optional[ContextSummary] = None
+        functional_context: Dict,
+        analyzed_keys: Set[str]
     ) -> AgentResponse:
         """
         Analiza la tarea y contexto para decidir estrategia.
 
         Args:
             task: Tarea a resolver (en lenguaje natural)
-            context_state: Estado del contexto
-            context_summary: Resumen con historial de análisis (opcional)
+            functional_context: Contexto funcional YA truncado y filtrado (sin config)
+            analyzed_keys: Set de keys que ya fueron analizadas en nodos previos
 
         Returns:
             AgentResponse con:
@@ -52,23 +50,11 @@ class InputAnalyzerAgent(BaseAgent):
                 - reasoning: str
         """
         try:
-            # Obtener contexto resumido (keys + valores truncados)
-            context_summary_dict = self._summarize_context(context_state.current)
+            # El contexto ya viene truncado por el Orchestrator
+            # No necesitamos hacer _summarize_context()
 
-            # Obtener historial de análisis (si existe)
-            analysis_history = []
-            if context_summary:
-                analysis_history = [
-                    {
-                        "node_id": entry.node_id,
-                        "analyzed_keys": entry.analyzed_keys,
-                        "timestamp": entry.timestamp
-                    }
-                    for entry in context_summary.analysis_history
-                ]
-
-            # Construir prompt (ahora incluye historial)
-            prompt = self._build_prompt(task, context_summary_dict, analysis_history)
+            # Construir prompt
+            prompt = self._build_prompt(task, functional_context, analyzed_keys)
 
             # Llamar a OpenAI
             start_time = time.time()
@@ -131,101 +117,21 @@ class InputAnalyzerAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
-    def _is_binary_string(self, value: str) -> bool:
-        """
-        Detecta si un string es binario/base64 vs texto legible.
+    # Métodos de truncado eliminados - ahora se usa truncate_for_llm() del Orchestrator
 
-        Args:
-            value: String a analizar
+    def _build_prompt(self, task: str, functional_context: Dict, analyzed_keys: Set[str]) -> str:
+        """Construye el prompt para el modelo"""
 
-        Returns:
-            True si es binario/base64, False si es texto legible
-        """
-        # Sample primeros 500 chars para evitar analizar strings gigantes
-        sample = value[:500]
-
-        # 1. Detectar base64 (PDFs, imágenes en base64)
-        base64_chars = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
-        if len(sample) > 100:
-            base64_ratio = sum(c in base64_chars for c in sample) / len(sample)
-            if base64_ratio > 0.95:  # >95% son caracteres base64
-                return True
-
-        # 2. Detectar caracteres no imprimibles (binarios)
-        printable_ratio = sum(c.isprintable() or c.isspace() for c in sample) / len(sample)
-        if printable_ratio < 0.80:  # <80% imprimibles = probablemente binario
-            return True
-
-        return False
-
-    def _summarize_context(self, context: Dict) -> Dict:
-        """
-        Resume el contexto para el prompt (evita enviar data muy grande).
-
-        Args:
-            context: Contexto completo
-
-        Returns:
-            Contexto resumido (strings largos truncados a metadata)
-        """
-        # Keys que NUNCA deben truncarse (metadata estructural crítica)
-        PRESERVE_KEYS = {
-            "database_schemas",  # Schemas de DB (crítico para análisis)
-            "database_schema",   # Variante singular
-            "db_schemas",        # Otra variante
-            "schema",            # Schema genérico
-            "metadata",          # Metadata estructural
-            "_analyzed_keys"     # 🔥 NUEVO: Para que el LLM vea qué ya fue analizado
-        }
-
-        summary = {}
-
-        for key, value in context.items():
-            # Si es una key crítica, preservarla completa
-            if key in PRESERVE_KEYS:
-                summary[key] = value
-                continue
-
-            if isinstance(value, str):
-                if len(value) > 200:
-                    # Detectar si es binario/base64 o texto legible
-                    if self._is_binary_string(value):
-                        # Binario/base64: truncar
-                        summary[key] = f"<string: {len(value)} chars>"
-                    else:
-                        # Texto legible: enviar completo para que LLM lo analice
-                        summary[key] = value
-                else:
-                    # Mantener valores cortos completos
-                    summary[key] = value
-            elif isinstance(value, bytes):
-                # Bytes (PDFs, imágenes)
-                summary[key] = f"<bytes: {len(value)} bytes>"
-            elif isinstance(value, (list, dict)):
-                # Listas/dicts: mostrar tipo y cantidad
-                summary[key] = f"<{type(value).__name__}: {len(value)} items>"
-            elif isinstance(value, (int, float, bool, type(None))):
-                # Números, booleanos, None: mantener valor real
-                summary[key] = value
-            else:
-                # Otros tipos: mostrar tipo
-                summary[key] = f"<{type(value).__name__}>"
-
-        return summary
-
-    def _build_prompt(self, task: str, context_summary: dict, analysis_history: list) -> str:
-        """Construye el prompt para el modelo (ahora con historial)"""
-
-        # Serializar historial
-        history_section = ""
-        if analysis_history:
-            history_json = json.dumps(analysis_history, indent=2, ensure_ascii=False)
-            history_section = f"""
-📚 **HISTORIAL DE ANÁLISIS PREVIOS:**
-{history_json}
+        # Serializar analyzed_keys
+        analyzed_keys_section = ""
+        if analyzed_keys:
+            analyzed_keys_list = list(analyzed_keys)
+            analyzed_keys_section = f"""
+📚 **KEYS YA ANALIZADAS:**
+{json.dumps(analyzed_keys_list, indent=2, ensure_ascii=False)}
 
 Las keys listadas arriba YA FUERON ANALIZADAS en nodos anteriores.
-NO necesitas volver a analizarlas. Solo enfócate en keys NUEVAS que no aparecen en el historial.
+NO necesitas volver a analizarlas. Solo enfócate en keys NUEVAS que no aparecen en esta lista.
 """
 
         return f"""Tu tarea: Decidir si necesitamos analizar la estructura del CONTEXTO ACTUAL antes de resolver la tarea.
@@ -234,12 +140,11 @@ NO necesitas volver a analizarlas. Solo enfócate en keys NUEVAS que no aparecen
 
 Tarea a resolver: {task}
 
-Contexto disponible AHORA (keys + valores resumidos):
-{json.dumps(context_summary, indent=2, ensure_ascii=False)}
+Contexto funcional disponible AHORA (ya truncado para tu lectura):
+{json.dumps(functional_context, indent=2, ensure_ascii=False)}
+{analyzed_keys_section}
 
-You have access to context['_analyzed_keys'] which contains paths to data that has already been analyzed by DataAnalyzer.
-
-Check if there are unanalyzed data sources.
+Check if there are unanalyzed data sources in the functional context.
 If ANY unanalyzed data exists → needs_analysis = True
 
 Devuelve JSON con esta estructura exacta:
@@ -250,13 +155,15 @@ Devuelve JSON con esta estructura exacta:
 }}
 
 ✅ Necesitas análisis (needs_analysis=true) si hay data SIN analizar:
-- PDFs, imágenes, archivos binarios que NO están en _analyzed_keys
-- Estructuras complejas (dict, list) que NO están en _analyzed_keys
-- Data muy grande (strings >10000 chars) que NO está en _analyzed_keys
+- PDFs truncados como "<base64 PDF: N chars>" que NO están en analyzed_keys
+- Imágenes truncadas como "<base64 image: N chars>" que NO están en analyzed_keys
+- CSVs truncados como "<CSV data: N chars>" que NO están en analyzed_keys
+- Estructuras complejas (dict, list) que NO están en analyzed_keys
 
 ❌ NO necesitas análisis (needs_analysis=false) si:
-- La data YA está en _analyzed_keys
-- Solo hay valores simples (strings cortos, números, booleans, credenciales)
+- TODAS las keys con data opaca YA están en analyzed_keys
+- Solo hay valores simples (strings cortos, números, booleans)
+- La data es texto legible (no binario/base64)
 
 Complejidad (basada en la TAREA, no en el contexto):
 - "simple": Tarea trivial (1-2 pasos obvios)

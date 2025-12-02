@@ -7,7 +7,6 @@ La ejecución en E2B se hace en el Orchestrator.
 import pytest
 from unittest.mock import Mock, AsyncMock
 from src.core.agents.data_analyzer import DataAnalyzerAgent
-from src.core.agents.state import ContextState
 
 
 @pytest.fixture
@@ -55,13 +54,11 @@ print(json.dumps({"insights": insights}, ensure_ascii=False))
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
 
-    # Ejecutar
-    context_state = ContextState(
-        initial={"pdf_data_b64": "JVBERi0x..."},
-        current={"pdf_data_b64": "JVBERi0x..."}
+    # Ejecutar con nueva firma
+    response = await data_analyzer.execute(
+        functional_context={"pdf_data_b64": "JVBERi0x..."},
+        analyzed_keys=set()
     )
-
-    response = await data_analyzer.execute(context_state)
 
     assert response.success is True
     assert "analysis_code" in response.data
@@ -79,12 +76,10 @@ async def test_data_analyzer_handles_ai_error(data_analyzer, mock_openai_client)
         side_effect=Exception("OpenAI API timeout")
     )
 
-    context_state = ContextState(
-        initial={"data": "test"},
-        current={"data": "test"}
+    response = await data_analyzer.execute(
+        functional_context={"data": "test"},
+        analyzed_keys=set()
     )
-
-    response = await data_analyzer.execute(context_state)
 
     assert response.success is False
     assert "OpenAI API timeout" in response.error
@@ -108,12 +103,10 @@ print(json.dumps({"insights": insights}))
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
 
-    context_state = ContextState(
-        initial={"data": "test"},
-        current={"data": "test"}
+    response = await data_analyzer.execute(
+        functional_context={"data": "test"},
+        analyzed_keys=set()
     )
-
-    response = await data_analyzer.execute(context_state)
 
     assert response.success is True
     # Verificar que el código fue limpiado (no tiene ```)
@@ -134,11 +127,6 @@ async def test_data_analyzer_with_error_history(data_analyzer, mock_openai_clien
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_code_response)
 
-    context_state = ContextState(
-        initial={"data": "test"},
-        current={"data": "test"}
-    )
-
     error_history = [
         {
             "stage": "analysis_validation",
@@ -147,7 +135,11 @@ async def test_data_analyzer_with_error_history(data_analyzer, mock_openai_clien
         }
     ]
 
-    response = await data_analyzer.execute(context_state, error_history=error_history)
+    response = await data_analyzer.execute(
+        functional_context={"data": "test"},
+        analyzed_keys=set(),
+        error_history=error_history
+    )
 
     assert response.success is True
     assert "analysis_code" in response.data

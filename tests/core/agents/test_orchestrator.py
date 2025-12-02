@@ -76,8 +76,8 @@ async def test_orchestrator_simple_flow_success(orchestrator, mock_agents):
         agent_name="OutputValidator"
     ))
 
-    # Ejecutar
-    result = await orchestrator.execute_workflow(
+    # Ejecutar - ahora devuelve tupla (context, context_manager)
+    result, context_mgr = await orchestrator.execute_workflow(
         task="Calculate result",
         context={"input": "test"},
         timeout=30
@@ -88,6 +88,7 @@ async def test_orchestrator_simple_flow_success(orchestrator, mock_agents):
     assert "_ai_metadata" in result
     assert result["_ai_metadata"]["attempts"] == 1
     assert "input_analysis" in result["_ai_metadata"]
+    assert context_mgr is not None  # Verificar que devuelve el ContextManager
 
 
 @pytest.mark.asyncio
@@ -155,7 +156,7 @@ async def test_orchestrator_with_data_analysis(orchestrator, mock_agents):
     ))
 
     # Ejecutar
-    result = await orchestrator.execute_workflow(
+    result, context_mgr = await orchestrator.execute_workflow(
         task="Process PDF",
         context={"data": "test"},
         timeout=30
@@ -228,7 +229,7 @@ async def test_orchestrator_retry_on_code_validation_error(orchestrator, mock_ag
     ))
 
     # Ejecutar
-    result = await orchestrator.execute_workflow(
+    result, context_mgr = await orchestrator.execute_workflow(
         task="Test",
         context={},
         timeout=30
@@ -261,7 +262,7 @@ async def test_orchestrator_max_retries_exceeded(orchestrator, mock_agents):
     ))
 
     # Ejecutar
-    result = await orchestrator.execute_workflow(
+    result, context_mgr = await orchestrator.execute_workflow(
         task="Test",
         context={},
         timeout=30

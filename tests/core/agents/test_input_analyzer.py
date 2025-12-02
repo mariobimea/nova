@@ -4,7 +4,6 @@ import pytest
 import json
 from unittest.mock import Mock, AsyncMock
 from src.core.agents.input_analyzer import InputAnalyzerAgent
-from src.core.agents.state import ContextState
 
 
 @pytest.fixture
@@ -40,15 +39,11 @@ async def test_input_analyzer_simple_task(input_analyzer, mock_openai_client):
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    # Ejecutar
-    context_state = ContextState(
-        initial={"num1": 5, "num2": 10},
-        current={"num1": 5, "num2": 10}
-    )
-
+    # Ejecutar con nueva firma
     response = await input_analyzer.execute(
         task="Suma estos dos números",
-        context_state=context_state
+        functional_context={"num1": 5, "num2": 10},
+        analyzed_keys=set()
     )
 
     assert response.success is True
@@ -73,14 +68,10 @@ async def test_input_analyzer_complex_task_pdf(input_analyzer, mock_openai_clien
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    context_state = ContextState(
-        initial={"pdf_data_b64": "JVBERi0x..."},
-        current={"pdf_data_b64": "JVBERi0x..."}
-    )
-
     response = await input_analyzer.execute(
         task="Extrae el total de esta factura",
-        context_state=context_state
+        functional_context={"pdf_data_b64": "JVBERi0x..."},
+        analyzed_keys=set()
     )
 
     assert response.success is True
@@ -96,14 +87,10 @@ async def test_input_analyzer_handles_openai_error(input_analyzer, mock_openai_c
         side_effect=Exception("OpenAI API error")
     )
 
-    context_state = ContextState(
-        initial={"key": "value"},
-        current={"key": "value"}
-    )
-
     response = await input_analyzer.execute(
         task="Test task",
-        context_state=context_state
+        functional_context={"key": "value"},
+        analyzed_keys=set()
     )
 
     assert response.success is False
@@ -124,14 +111,10 @@ async def test_input_analyzer_invalid_response_structure(input_analyzer, mock_op
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    context_state = ContextState(
-        initial={"key": "value"},
-        current={"key": "value"}
-    )
-
     response = await input_analyzer.execute(
         task="Test",
-        context_state=context_state
+        functional_context={"key": "value"},
+        analyzed_keys=set()
     )
 
     assert response.success is False

@@ -3,7 +3,6 @@
 import pytest
 from unittest.mock import Mock, AsyncMock
 from src.core.agents.code_generator import CodeGeneratorAgent
-from src.core.agents.state import ContextState
 
 
 @pytest.fixture
@@ -67,15 +66,12 @@ context['ocr_text'] = text
         }
     ]
 
-    # Ejecutar
-    context_state = ContextState(
-        initial={"pdf_path": "/tmp/test.pdf"},
-        current={"pdf_path": "/tmp/test.pdf"}
-    )
-
+    # Ejecutar con nueva firma
     response = await code_generator_with_rag.execute(
         task="Extract text from PDF",
-        context_state=context_state
+        functional_context={"pdf_path": "/tmp/test.pdf"},
+        config_context={},
+        accumulated_insights={}
     )
 
     # Verificar que llamó a RAG
@@ -111,14 +107,11 @@ async def test_code_generator_without_rag_client(mock_openai_client):
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
     # Ejecutar
-    context_state = ContextState(
-        initial={"input": "test"},
-        current={"input": "test"}
-    )
-
     response = await code_generator.execute(
         task="Calculate result",
-        context_state=context_state
+        functional_context={"input": "test"},
+        config_context={},
+        accumulated_insights={}
     )
 
     # Verificar que funcionó sin RAG
@@ -155,14 +148,11 @@ async def test_code_generator_handles_rag_errors(code_generator_with_rag, mock_o
     mock_rag_client.search.side_effect = Exception("RAG service down")
 
     # Ejecutar
-    context_state = ContextState(
-        initial={"input": "test"},
-        current={"input": "test"}
-    )
-
     response = await code_generator_with_rag.execute(
         task="Test task",
-        context_state=context_state
+        functional_context={"input": "test"},
+        config_context={},
+        accumulated_insights={}
     )
 
     # Verificar que continuó a pesar del error de RAG

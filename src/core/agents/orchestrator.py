@@ -26,9 +26,9 @@ from .code_generator import CodeGeneratorAgent
 from .code_validator import CodeValidatorAgent
 from .output_validator import OutputValidatorAgent
 from .analysis_validator import AnalysisValidatorAgent
-from .config_keys import filter_config_keys
-from ..e2b.executor import E2BExecutor
 from ..context import ContextManager
+from ..context_utils.truncate import truncate_for_llm
+from ..e2b.executor import E2BExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -231,22 +231,23 @@ class MultiAgentOrchestrator:
 
         try:
             # 2. InputAnalyzer (UNA SOLA VEZ)
-            # 🔥 NUEVO: Filtrar config keys antes de pasar al InputAnalyzer
-            # El InputAnalyzer solo necesita ver DATA, no configuración
-            filtered_context = filter_config_keys(context_state.current)
             self.logger.info(f"📊 Ejecutando InputAnalyzer...")
-            self.logger.info(f"   Context keys: {len(context_state.current)} total, {len(filtered_context)} after filtering config")
 
-            # Crear un ContextState filtrado solo para InputAnalyzer
-            filtered_context_state = ContextState(
-                initial=filtered_context.copy(),
-                current=filtered_context.copy()
-            )
+            # Obtener contexto funcional y truncarlo
+            functional_context = context_manager.get_functional_context()
+            functional_context_truncated = truncate_for_llm(functional_context)
+
+            # Obtener analyzed_keys del summary
+            analyzed_keys = context_manager.get_summary().get_analyzed_keys()
+
+            self.logger.info(f"   Context keys: {len(context_state.current)} total")
+            self.logger.info(f"   Functional keys: {len(functional_context)} (after filtering config)")
+            self.logger.info(f"   Already analyzed: {len(analyzed_keys)} keys")
 
             input_analysis = await self.input_analyzer.execute(
                 task=task,
-                context_state=filtered_context_state,
-                context_summary=context_manager.get_summary()  # ⬅️ NUEVO: Pasar summary
+                functional_context=functional_context_truncated,
+                analyzed_keys=analyzed_keys
             )
 
             # 🔥 Registrar step 1: InputAnalyzer
@@ -280,21 +281,22 @@ class MultiAgentOrchestrator:
 
                     try:
                         # 3.1 DataAnalyzer genera código de análisis
-                        # 🔥 NUEVO: Filtrar config keys antes de pasar al DataAnalyzer
-                        # El DataAnalyzer solo necesita analizar DATA opaca, no configuración
-                        filtered_context_data = filter_config_keys(context_state.current)
                         self.logger.info("💻 Generando código de análisis...")
-                        self.logger.info(f"   Context keys: {len(context_state.current)} total, {len(filtered_context_data)} after filtering config")
 
-                        # Crear un ContextState filtrado solo para DataAnalyzer
-                        filtered_context_state_data = ContextState(
-                            initial=filtered_context_data.copy(),
-                            current=filtered_context_data.copy()
-                        )
+                        # Obtener contexto funcional truncado (ya lo tenemos de InputAnalyzer)
+                        # Actualizar por si hubo cambios
+                        functional_context = context_manager.get_functional_context()
+                        functional_context_truncated = truncate_for_llm(functional_context)
+
+                        # Obtener analyzed_keys actualizados
+                        analyzed_keys = context_manager.get_summary().get_analyzed_keys()
+
+                        self.logger.info(f"   Functional keys: {len(functional_context)}")
+                        self.logger.info(f"   Already analyzed: {len(analyzed_keys)} keys")
 
                         data_analysis = await self.data_analyzer.execute(
-                            context_state=filtered_context_state_data,
-                            context_summary=context_manager.get_summary(),  # ⬅️ NUEVO: Pasar summary
+                            functional_context=functional_context_truncated,
+                            analyzed_keys=analyzed_keys,
                             error_history=analysis_errors
                         )
 
@@ -359,12 +361,18 @@ class MultiAgentOrchestrator:
 
                         # 3.3 E2B execution del código de análisis
                         self.logger.info("⚡ Ejecutando código de análisis en E2B...")
+
+                        # Guardar snapshot del functional_context ANTES de ejecutar
+                        functional_context_before_analysis = truncate_for_llm(
+                            context_manager.get_functional_context()
+                        )
+
                         e2b_start = time.time()
 
                         try:
                             insights_result = await self.e2b.execute_code(
                                 code=data_analysis.data["analysis_code"],
-                                context=context_state.current,
+                                context=context_manager.get_execution_context(),  # Contexto completo para E2B
                                 timeout=30
                             )
                             e2b_time_ms = (time.time() - e2b_start) * 1000
@@ -428,9 +436,10 @@ class MultiAgentOrchestrator:
                         self.logger.info("✅ Validando insights...")
                         insights_val = await self.analysis_validator.execute(
                             task=task,
+                            functional_context_before=functional_context_before_analysis,
                             insights=insights,
-                            context_schema=self._summarize_context_for_step(context_state.current),
-                            analysis_code=data_analysis.data["analysis_code"]
+                            analysis_code=data_analysis.data["analysis_code"],
+                            execution_result=insights_result
                         )
 
                         # Registrar step 2.3: AnalysisValidator
@@ -550,23 +559,28 @@ class MultiAgentOrchestrator:
 
                 try:
                     # 4.1 CodeGenerator
-                    # ✅ CodeGenerator recibe el contexto COMPLETO (sin filtrar)
-                    # Necesita ver config (schemas, credentials) para generar código correcto
                     self.logger.info("💻 Generando código...")
 
-                    # 🔥 DEBUG: Verificar si los insights están disponibles
-                    self.logger.info(f"🔍 DEBUG - context_state.data_insights: {context_state.data_insights is not None}")
-                    if context_state.data_insights:
-                        self.logger.info(f"   Insights keys: {list(context_state.data_insights.keys())}")
-                    self.logger.info(f"🔍 DEBUG - context_state.analysis_validation: {context_state.analysis_validation is not None}")
+                    # Obtener contextos separados
+                    functional_context = context_manager.get_functional_context()
+                    functional_context_truncated = truncate_for_llm(functional_context)
+                    config_context = context_manager.get_config_context()  # NO truncar (schemas completos)
+
+                    # Obtener insights acumulados
+                    accumulated_insights = context_manager.get_summary().get_all_insights()
+
+                    self.logger.info(f"   Functional keys: {len(functional_context)}")
+                    self.logger.info(f"   Config keys: {len(config_context)}")
+                    self.logger.info(f"   Accumulated insights: {len(accumulated_insights)} keys")
 
                     code_gen = await self.code_generator.execute(
                         task=task,
-                        context_state=context_state,  # ✅ Contexto completo (NO filtrado)
-                        context_summary=context_manager.get_summary(),  # 🔥 NUEVO: Pasar Context Summary
+                        functional_context=functional_context_truncated,
+                        config_context=config_context,
+                        accumulated_insights=accumulated_insights,
                         error_history=execution_state.errors,
-                        node_type=node_type,  # Pass node type to code generator
-                        node_id=node_id  # Pass node ID to code generator
+                        node_type=node_type,
+                        node_id=node_id
                     )
 
                     # 🔥 Registrar step 3: CodeGenerator
@@ -633,13 +647,19 @@ class MultiAgentOrchestrator:
 
                     # 4.3 E2B Execution
                     self.logger.info("⚡ Ejecutando código en E2B...")
+
+                    # Guardar snapshot del functional_context ANTES de ejecutar
+                    functional_context_before_exec = truncate_for_llm(
+                        context_manager.get_functional_context()
+                    )
+
                     e2b_start = time.time()
                     sandbox_id = None  # TODO: Capturar del executor si es posible
 
                     try:
                         updated_context = await self.e2b.execute_code(
                             code=code_gen.data["code"],
-                            context=context_state.current,
+                            context=context_manager.get_execution_context(),  # Contexto completo para E2B
                             timeout=timeout
                         )
 
@@ -715,6 +735,7 @@ class MultiAgentOrchestrator:
                             # MERGE context updates with current context
                             # This preserves existing keys that weren't modified
                             context_state.current.update(updated_context)
+                            context_manager.update(updated_context)  # También actualizar ContextManager
 
                             self.logger.info(f"🔍 DEBUG - After update:")
                             self.logger.info(f"   context_state.current AFTER update: {list(context_state.current.keys())}")
@@ -787,18 +808,23 @@ class MultiAgentOrchestrator:
                     # 4.4 OutputValidator (post-ejecución)
                     self.logger.info("✅ Validando resultado...")
 
+                    # Obtener functional_context DESPUÉS de ejecutar (truncado)
+                    functional_context_after_exec = truncate_for_llm(
+                        context_manager.get_functional_context()
+                    )
+
                     # 🔥 DEBUG: Log what we're passing to OutputValidator
                     self.logger.info(f"🔍 DEBUG - Calling OutputValidator with:")
-                    self.logger.info(f"   context_before keys: {list(context_state.initial.keys())}")
-                    self.logger.info(f"   context_after keys: {list(context_state.current.keys())}")
-                    self.logger.info(f"   context_after full: {context_state.current}")
+                    self.logger.info(f"   functional_context_before keys: {list(functional_context_before_exec.keys())}")
+                    self.logger.info(f"   functional_context_after keys: {list(functional_context_after_exec.keys())}")
+                    self.logger.info(f"   execution_result: {execution_state.execution_result}")
 
                     output_val = await self.output_validator.execute(
                         task=task,
-                        context_before=context_state.initial,
-                        context_after=context_state.current,
-                        generated_code=code_gen.data["code"],
-                        execution_result=execution_state.execution_result  # 🔥 NUEVO: Pasar stderr/stdout
+                        functional_context_before=functional_context_before_exec,
+                        functional_context_after=functional_context_after_exec,
+                        code_executed=code_gen.data["code"],
+                        execution_result=execution_state.execution_result
                     )
 
                     # 🔥 Registrar step 6: OutputValidator

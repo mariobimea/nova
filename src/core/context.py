@@ -11,6 +11,7 @@ See: /documentacion/INVESTIGACION-CONTEXT-MANAGEMENT.md
 import copy
 from typing import Any, Dict, Optional
 from .context_summary import ContextSummary, AnalysisEntry
+from .context_utils.config_keys import CONFIG_KEYS
 
 
 class ContextManager:
@@ -300,3 +301,98 @@ class ContextManager:
         """
         current_keys = set(self._context.keys())
         return self._summary.get_new_keys(current_keys)
+
+    # ==========================================
+    # Context Filtering Methods (New)
+    # ==========================================
+
+    def get_execution_context(self) -> Dict[str, Any]:
+        """
+        Get complete context for E2B execution (config + functional + metadata).
+
+        This is the full context that gets injected into the E2B sandbox,
+        including configuration, functional data, and internal metadata.
+
+        Returns:
+            Complete context dictionary
+
+        Example:
+            >>> context = ContextManager({
+            ...     "pdf_data": "JVBERi...",
+            ...     "db_host": "localhost",
+            ...     "db_password": "secret",
+            ...     "_analyzed_keys": ["pdf_data"]
+            ... })
+            >>> context.get_execution_context()
+            {
+                "pdf_data": "JVBERi...",
+                "db_host": "localhost",
+                "db_password": "secret",
+                "_analyzed_keys": ["pdf_data"]
+            }
+        """
+        return self._context.copy()
+
+    def get_functional_context(self) -> Dict[str, Any]:
+        """
+        Get functional context for LLMs (without config or metadata).
+
+        Filters out:
+        - Configuration keys (db_host, db_password, email credentials, etc.)
+        - Internal metadata (keys starting with '_')
+
+        This is what InputAnalyzer, DataAnalyzer, and Validators receive.
+
+        Returns:
+            Context with only functional data
+
+        Example:
+            >>> context = ContextManager({
+            ...     "pdf_data": "JVBERi...",
+            ...     "email_body": "Please process...",
+            ...     "db_host": "localhost",
+            ...     "db_password": "secret",
+            ...     "_analyzed_keys": ["pdf_data"]
+            ... })
+            >>> context.get_functional_context()
+            {
+                "pdf_data": "JVBERi...",
+                "email_body": "Please process..."
+            }
+        """
+        return {
+            k: v for k, v in self._context.items()
+            if not k.startswith('_') and k not in CONFIG_KEYS
+        }
+
+    def get_config_context(self) -> Dict[str, Any]:
+        """
+        Get configuration context for CodeGenerator.
+
+        Includes only configuration keys:
+        - Database credentials (db_host, db_password, database_schemas)
+        - Email credentials (email_user, email_password)
+        - API credentials (GCP_SERVICE_ACCOUNT_JSON, AWS keys, etc.)
+        - Workflow configuration (client_slug, sender_whitelist, etc.)
+
+        Returns:
+            Context with only configuration
+
+        Example:
+            >>> context = ContextManager({
+            ...     "pdf_data": "JVBERi...",
+            ...     "db_host": "localhost",
+            ...     "db_password": "secret",
+            ...     "GCP_SERVICE_ACCOUNT_JSON": "{...}"
+            ... })
+            >>> context.get_config_context()
+            {
+                "db_host": "localhost",
+                "db_password": "secret",
+                "GCP_SERVICE_ACCOUNT_JSON": "{...}"
+            }
+        """
+        return {
+            k: v for k, v in self._context.items()
+            if k in CONFIG_KEYS
+        }
