@@ -45,7 +45,7 @@ class MultiAgentOrchestrator:
         output_validator: OutputValidatorAgent,
         analysis_validator: AnalysisValidatorAgent,
         e2b_executor: E2BExecutor,
-        max_retries: int = 3
+        max_retries: int = 5
     ):
         self.input_analyzer = input_analyzer
         self.data_analyzer = data_analyzer

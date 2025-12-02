@@ -197,7 +197,7 @@ class CachedExecutor(ExecutorStrategy):
             output_validator=output_validator,
             analysis_validator=analysis_validator,
             e2b_executor=e2b_executor,
-            max_retries=3
+            max_retries=5
         )
 
         # Initialize Code Cache Manager (exact hash cache)

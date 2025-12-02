@@ -6,7 +6,7 @@ Responsabilidad:
 
 Características:
     - Modelo: gpt-4o (inteligente, para código complejo)
-    - Ejecuciones: Hasta 3 veces (con feedback de errores)
+    - Ejecuciones: Hasta 5 veces (con feedback de errores)
     - Tool calling: SÍ (buscar documentación)
     - Costo: ~$0.003 por ejecución
 """
