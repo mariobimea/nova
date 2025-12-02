@@ -29,15 +29,16 @@ class CodeGeneratorAgent(BaseAgent):
 
     def __init__(
         self,
+        openai_client=None,  # Legacy first arg - kept for backwards compatibility
         rag_client: Optional[RAGClient] = None,
-        model_name: Optional[str] = None,
-        openai_client=None  # Legacy support - will be ignored if model_name is Anthropic
+        model_name: Optional[str] = None
     ):
         super().__init__("CodeGenerator")
 
         # Determine model to use (priority: constructor > env var > default)
         self.model_name = model_name or os.getenv("CODE_GENERATOR_MODEL", self.DEFAULT_MODEL)
         self.rag_client = rag_client
+        self._openai_client = openai_client  # Store for OpenAI models
 
         # Initialize the appropriate client based on model
         self._init_client(openai_client)

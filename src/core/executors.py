@@ -183,7 +183,17 @@ class CachedExecutor(ExecutorStrategy):
         # Initialize all agents
         input_analyzer = InputAnalyzerAgent(openai_client)
         data_analyzer = DataAnalyzerAgent(openai_client, e2b_executor)
-        code_generator = CodeGeneratorAgent(openai_client, rag_client)  # Pass RAG client
+
+        # CodeGenerator now supports multiple providers (OpenAI, Anthropic)
+        # Model priority: CODE_GENERATOR_MODEL env var > default (claude-sonnet-4-5)
+        code_generator_model = os.getenv("CODE_GENERATOR_MODEL", "claude-sonnet-4-5")
+        code_generator = CodeGeneratorAgent(
+            openai_client=openai_client,  # First arg for backwards compatibility
+            rag_client=rag_client,
+            model_name=code_generator_model
+        )
+        logger.info(f"CodeGenerator using model: {code_generator_model}")
+
         code_validator = CodeValidatorAgent()
         output_validator = OutputValidatorAgent(openai_client)
         analysis_validator = AnalysisValidatorAgent(openai_client)
