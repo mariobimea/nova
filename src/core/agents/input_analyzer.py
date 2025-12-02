@@ -134,11 +134,13 @@ Las keys listadas arriba YA FUERON ANALIZADAS en nodos anteriores.
 NO necesitas volver a analizarlas. Solo enfócate en keys NUEVAS que no aparecen en esta lista.
 """
 
-        return f"""Tu tarea: Decidir si necesitamos analizar data OPACA (binaria/base64) antes de resolver la tarea.
+        return f"""Decide si el CONTEXTO ACTUAL contiene data opaca (binaria/base64) que necesita análisis.
 
-Tarea a resolver: {task}
+⚠️ REGLA CRÍTICA: Solo mira el CONTEXTO ACTUAL. NO especules sobre lo que la tarea PODRÍA generar.
 
-Contexto funcional disponible:
+Tarea: {task}
+
+Contexto funcional ACTUAL:
 {json.dumps(functional_context, indent=2, ensure_ascii=False)}
 {analyzed_keys_section}
 
@@ -149,19 +151,19 @@ Devuelve JSON:
   "reasoning": "Por qué decidiste esto"
 }}
 
-✅ needs_analysis=TRUE solo si hay data OPACA que NO está en analyzed_keys:
-- PDFs en base64 (marcados como "<base64 PDF: N chars>")
-- Imágenes en base64 (marcados como "<base64 image: N chars>")
-- Archivos binarios que necesitan decodificarse
+✅ needs_analysis=TRUE SOLO si en el contexto ACTUAL hay:
+- PDFs en base64 (marcados "<base64 PDF: N chars>")
+- Imágenes en base64 (marcados "<base64 image: N chars>")
+- Data binaria que necesita decodificarse
 
 ❌ needs_analysis=FALSE si:
-- La data ya está en analyzed_keys (ya fue analizada)
-- El texto ya es legible (no necesita decodificación)
+- El contexto está vacío o casi vacío
 - Solo hay strings, números, booleans normales
-- Ya tienes texto extraído visible en el contexto
+- El texto ya es legible (no binario)
+- Las keys ya están en analyzed_keys
 
-⚠️ IMPORTANTE: Si el contexto ya tiene texto legible (extracted_text, ocr_text, etc.), NO necesitas análisis.
-El análisis es SOLO para decodificar data binaria/base64, no para texto que ya puedes leer.
+🚫 NO especules sobre lo que la tarea PODRÍA crear. Solo analiza lo que YA EXISTE en el contexto.
+Si el contexto no tiene data opaca AHORA MISMO → needs_analysis=FALSE
 
 Complejidad (basada en la TAREA):
 - "simple": 1-2 pasos
