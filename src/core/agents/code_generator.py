@@ -108,6 +108,11 @@ class CodeGeneratorAgent(BaseAgent):
         try:
             start_time = time.time()
 
+            # 🔍 DEBUG: Log the task and node info
+            self.logger.info(f"🔍 DEBUG - Task: '{task}'")
+            self.logger.info(f"🔍 DEBUG - Node ID: '{node_id}', Node Type: '{node_type}'")
+            self.logger.info(f"🔍 DEBUG - Error history count: {len(error_history or [])}")
+
             # Combinar functional + config para el prompt
             # El functional_context ya viene truncado
             # El config_context se pasa completo (database_schemas, credenciales, etc.)
@@ -126,25 +131,42 @@ class CodeGeneratorAgent(BaseAgent):
                 else:
                     self.logger.info(f"   - {key}: {type(value).__name__}")
 
-            # 🔍 DEBUG: Log extracted_text length if present (key correcta!)
-            if 'extracted_text' in combined_context:
-                text_length = len(combined_context['extracted_text'])
-                text_preview = combined_context['extracted_text'][:200]
-                self.logger.info(f"🔍 DEBUG - CodeGenerator received 'extracted_text': {text_length} chars")
-                self.logger.info(f"🔍 DEBUG - Text preview: {text_preview}...")
-                # Check if it contains the expected total
-                if '1.657,83' in combined_context['extracted_text']:
-                    self.logger.info("✅ DEBUG - Text contains '1.657,83 €' (expected total)")
-                else:
-                    self.logger.warning("⚠️ DEBUG - Text does NOT contain '1.657,83 €'")
-                if 'TOTAL' in combined_context['extracted_text']:
-                    self.logger.info("✅ DEBUG - Text contains 'TOTAL'")
-                    # Show context around TOTAL
-                    import re
-                    total_matches = list(re.finditer(r'.{0,50}TOTAL.{0,50}', combined_context['extracted_text']))
-                    self.logger.info(f"🔍 DEBUG - Found {len(total_matches)} 'TOTAL' occurrences:")
-                    for i, match in enumerate(total_matches[:5]):  # Show first 5
-                        self.logger.info(f"   [{i+1}] {match.group()}")
+            # 🔍 DEBUG: Buscar CUALQUIER key que podría tener el texto del PDF
+            possible_text_keys = ['extracted_text', 'ocr_text', 'pdf_text', 'document_text', 'text']
+            text_key_found = None
+
+            for key in possible_text_keys:
+                if key in combined_context:
+                    text_key_found = key
+                    text_value = combined_context[key]
+
+                    if isinstance(text_value, str):
+                        text_length = len(text_value)
+                        text_preview = text_value[:200]
+                        self.logger.info(f"🔍 DEBUG - Found text in key '{key}': {text_length} chars")
+                        self.logger.info(f"🔍 DEBUG - Text preview: {text_preview}...")
+
+                        # Check if it contains the expected total
+                        if '1.657,83' in text_value or '1657.83' in text_value:
+                            self.logger.info("✅ DEBUG - Text contains '1.657,83' or '1657.83' (expected total)")
+                        else:
+                            self.logger.warning(f"⚠️ DEBUG - Text in '{key}' does NOT contain expected total '1.657,83'")
+
+                        if 'TOTAL' in text_value:
+                            self.logger.info(f"✅ DEBUG - Text in '{key}' contains 'TOTAL'")
+                            # Show context around TOTAL
+                            import re
+                            total_matches = list(re.finditer(r'.{0,50}TOTAL.{0,50}', text_value))
+                            self.logger.info(f"🔍 DEBUG - Found {len(total_matches)} 'TOTAL' occurrences:")
+                            for i, match in enumerate(total_matches[:5]):  # Show first 5
+                                self.logger.info(f"   [{i+1}] {match.group()}")
+                    else:
+                        self.logger.warning(f"⚠️ DEBUG - Key '{key}' exists but is not a string: {type(text_value).__name__}")
+                    break
+
+            if not text_key_found:
+                self.logger.warning(f"⚠️ DEBUG - NO text key found! Looked for: {possible_text_keys}")
+                self.logger.warning(f"⚠️ DEBUG - Available keys in context: {list(combined_context.keys())}")
 
             # Construir prompt
             prompt = self._build_prompt(
