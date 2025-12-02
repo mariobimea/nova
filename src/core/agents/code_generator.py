@@ -58,8 +58,12 @@ class CodeGeneratorAgent(BaseAgent):
     def _is_anthropic_model(self) -> bool:
         """Check if the model is an Anthropic model"""
         anthropic_models = [
-            "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5",
-            "sonnet", "haiku", "opus", "claude"
+            # Claude 4.5
+            "claude-sonnet-4-5", "sonnet-4-5",
+            # Claude 4
+            "claude-sonnet-4", "sonnet-4", "claude-opus-4", "opus-4",
+            # Aliases
+            "sonnet", "opus", "claude"
         ]
         return self.model_name.lower() in [m.lower() for m in anthropic_models]
 
@@ -79,16 +83,22 @@ class CodeGeneratorAgent(BaseAgent):
             self.provider = "anthropic"
 
             # Map model name to API model ID
+            # See: https://docs.anthropic.com/en/docs/about-claude/models
             model_mapping = {
-                "claude-sonnet-4-5": "claude-sonnet-4-5-20250514",
-                "sonnet": "claude-sonnet-4-5-20250514",
-                "claude-haiku-4-5": "claude-haiku-4-5-20250514",
-                "haiku": "claude-haiku-4-5-20250514",
-                "claude-opus-4-5": "claude-opus-4-5-20250514",
-                "opus": "claude-opus-4-5-20250514",
-                "claude": "claude-sonnet-4-5-20250514",
+                # Claude 4.5 models
+                "claude-sonnet-4-5": "claude-sonnet-4-5-20250929",
+                "sonnet-4-5": "claude-sonnet-4-5-20250929",
+                # Claude 4 models
+                "claude-sonnet-4": "claude-sonnet-4-20250514",
+                "sonnet-4": "claude-sonnet-4-20250514",
+                "claude-opus-4": "claude-opus-4-20250514",
+                "opus-4": "claude-opus-4-20250514",
+                # Aliases (default to Sonnet 4 - stable)
+                "sonnet": "claude-sonnet-4-20250514",
+                "opus": "claude-opus-4-20250514",
+                "claude": "claude-sonnet-4-20250514",
             }
-            self.api_model = model_mapping.get(self.model_name.lower(), "claude-sonnet-4-5-20250514")
+            self.api_model = model_mapping.get(self.model_name.lower(), "claude-sonnet-4-20250514")
 
             self.logger.info(f"Anthropic client initialized (model: {self.api_model})")
 
