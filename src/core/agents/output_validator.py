@@ -314,19 +314,47 @@ Devuelve JSON:
 """
         return prompt
 
+    def _is_binary_string(self, value: str) -> bool:
+        """
+        Detecta si un string es binario/base64 vs texto legible.
+
+        Args:
+            value: String a analizar
+
+        Returns:
+            True si es binario/base64, False si es texto legible
+        """
+        # Sample primeros 500 chars para evitar analizar strings gigantes
+        sample = value[:500]
+
+        # 1. Detectar base64 (PDFs, imágenes en base64)
+        base64_chars = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
+        if len(sample) > 100:
+            base64_ratio = sum(c in base64_chars for c in sample) / len(sample)
+            if base64_ratio > 0.95:  # >95% son caracteres base64
+                return True
+
+        # 2. Detectar caracteres no imprimibles (binarios)
+        printable_ratio = sum(c.isprintable() or c.isspace() for c in sample) / len(sample)
+        if printable_ratio < 0.80:  # <80% imprimibles = probablemente binario
+            return True
+
+        return False
+
     def _compact_context(self, context: Dict, max_str_length: int = 2000) -> Dict:
         """
         Compacta el contexto para el prompt SIN perder información estructural.
 
         Reglas:
         - Strings cortos (<2000 chars): enviar completos
-        - Strings largos (>2000 chars): truncar mostrando inicio + "..."
+        - Strings largos (>2000 chars): detectar si es binario o texto legible
+          - Binario/base64: truncar
+          - Texto legible: enviar completo (para validación correcta)
         - Dicts/Lists: enviar estructura completa (sin resumir a "<dict with X items>")
-        - PDFs/Binarios: mostrar metadata (path, size) no contenido
 
         Args:
             context: Contexto a compactar
-            max_str_length: Longitud máxima para strings antes de truncar
+            max_str_length: Longitud máxima para strings antes de truncar (solo binarios)
 
         Returns:
             Contexto compactado pero con estructura real visible
@@ -337,15 +365,13 @@ Devuelve JSON:
             # CASO 1: Strings
             if isinstance(value, str):
                 if len(value) > max_str_length:
-                    # Detect if it's likely base64 encoded data (PDF, images, etc.)
-                    is_base64 = len(value) > 10000 and all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in value[:100])
-
-                    if is_base64:
-                        # Likely a PDF or binary file in base64
-                        compact[key] = f"<base64 data: {len(value)} chars, likely PDF/binary file>"
+                    # Detectar si es binario/base64 o texto legible
+                    if self._is_binary_string(value):
+                        # Binario/base64: truncar
+                        compact[key] = f"<binary data: {len(value)} chars, likely PDF/binary file>"
                     else:
-                        # Truncar pero mostrar inicio + metadata
-                        compact[key] = f"{value[:max_str_length]}... [TRUNCATED - total {len(value)} chars]"
+                        # Texto legible: enviar completo para validación correcta
+                        compact[key] = value
                 else:
                     # String corto, enviar completo
                     compact[key] = value
@@ -385,15 +411,13 @@ Devuelve JSON:
         """
         if isinstance(value, str):
             if len(value) > max_str_length:
-                # Detect if it's likely base64 encoded data (PDF, images, etc.)
-                # Base64 strings are typically very long and contain only alphanumeric + /+=
-                is_base64 = len(value) > 10000 and all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in value[:100])
-
-                if is_base64:
-                    # Likely a PDF or binary file in base64
-                    return f"<base64 data: {len(value)} chars, likely PDF/binary file>"
+                # Detectar si es binario/base64 o texto legible
+                if self._is_binary_string(value):
+                    # Binario/base64: truncar
+                    return f"<binary data: {len(value)} chars, likely PDF/binary file>"
                 else:
-                    return f"{value[:max_str_length]}... [TRUNCATED - {len(value)} chars]"
+                    # Texto legible: enviar completo para validación correcta
+                    return value
             return value
 
         elif isinstance(value, dict):
