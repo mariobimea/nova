@@ -282,7 +282,8 @@ Devuelve JSON:
 {
   "valid": true/false,
   "reason": "Explicación detallada de por qué es válido o inválido",
-  "python_error": "Si hay error en stderr, extrae SOLO la línea del error específico. Si no hay error, omite este campo."
+  "python_error": "Si hay error en stderr, extrae SOLO la línea del error específico. Si no hay error, omite este campo.",
+  "code_issue_hint": "SOLO si valid=false y el problema está en la LÓGICA del código (no en stderr): indica QUÉ parte del código parece estar causando el problema y POR QUÉ crees que falla. NO des la solución, solo el diagnóstico."
 }
 
 🔴 Es INVÁLIDO si:

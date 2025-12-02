@@ -857,11 +857,17 @@ class MultiAgentOrchestrator:
                         error_msg = f"Output inválido: {output_val.data['reason']}"
                         self.logger.warning(f"⚠️ {error_msg}")
 
-                        # 🔥 NUEVO: Si el OutputValidator extrajo un python_error, agregarlo al feedback
+                        # 🔥 Si el OutputValidator extrajo un python_error, agregarlo al feedback
                         python_error = output_val.data.get("python_error")
                         if python_error:
                             error_msg += f"\n\n**Error de Python detectado:**\n{python_error}"
                             self.logger.error(f"🐍 Python error: {python_error}")
+
+                        # 🔥 Si el OutputValidator dio un hint sobre el problema en el código, agregarlo
+                        code_issue_hint = output_val.data.get("code_issue_hint")
+                        if code_issue_hint:
+                            error_msg += f"\n\n**Diagnóstico del problema:**\n{code_issue_hint}"
+                            self.logger.warning(f"💡 Code issue hint: {code_issue_hint}")
 
                         execution_state.add_error("output_validation", error_msg, failed_code=code_gen.data["code"])
                         continue

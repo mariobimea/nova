@@ -5,32 +5,113 @@ Responsabilidad:
     Generar código ejecutable que resuelve la tarea.
 
 Características:
-    - Modelo: gpt-4o (inteligente, para código complejo)
+    - Modelo: Configurable (default: claude-sonnet-4-5)
     - Ejecuciones: Hasta 5 veces (con feedback de errores)
     - Tool calling: SÍ (buscar documentación)
-    - Costo: ~$0.003 por ejecución
+    - Soporta: OpenAI y Anthropic
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import json
 import time
-from openai import AsyncOpenAI
+import os
+import asyncio
 
 from .base import BaseAgent, AgentResponse
 from ..integrations.rag_client import RAGClient
 
 
 class CodeGeneratorAgent(BaseAgent):
-    """Genera código Python ejecutable usando IA"""
+    """Genera código Python ejecutable usando IA (OpenAI o Anthropic)"""
 
-    def __init__(self, openai_client: AsyncOpenAI, rag_client: Optional[RAGClient] = None):
+    # Default model - can be overridden via constructor or env var
+    DEFAULT_MODEL = "claude-sonnet-4-5"
+
+    def __init__(
+        self,
+        rag_client: Optional[RAGClient] = None,
+        model_name: Optional[str] = None,
+        openai_client=None  # Legacy support - will be ignored if model_name is Anthropic
+    ):
         super().__init__("CodeGenerator")
-        self.client = openai_client
-        self.model = "gpt-4o"  # Modelo inteligente
-        self.rag_client = rag_client  # Optional RAG client for doc search
 
-        # Definir tools para búsqueda de docs via RAG
-        self.tools = [
+        # Determine model to use (priority: constructor > env var > default)
+        self.model_name = model_name or os.getenv("CODE_GENERATOR_MODEL", self.DEFAULT_MODEL)
+        self.rag_client = rag_client
+
+        # Initialize the appropriate client based on model
+        self._init_client(openai_client)
+
+        self.logger.info(f"CodeGeneratorAgent initialized with model: {self.model_name}")
+
+    def _init_client(self, openai_client=None):
+        """Initialize the appropriate AI client based on model name"""
+
+        # Check if it's an Anthropic model
+        if self._is_anthropic_model():
+            self._init_anthropic_client()
+        else:
+            # OpenAI model
+            self._init_openai_client(openai_client)
+
+    def _is_anthropic_model(self) -> bool:
+        """Check if the model is an Anthropic model"""
+        anthropic_models = [
+            "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5",
+            "sonnet", "haiku", "opus", "claude"
+        ]
+        return self.model_name.lower() in [m.lower() for m in anthropic_models]
+
+    def _init_anthropic_client(self):
+        """Initialize Anthropic client"""
+        try:
+            import anthropic
+
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY environment variable is required for Anthropic models. "
+                    "Get API key at: https://console.anthropic.com/settings/keys"
+                )
+
+            self.client = anthropic.Anthropic(api_key=api_key)
+            self.provider = "anthropic"
+
+            # Map model name to API model ID
+            model_mapping = {
+                "claude-sonnet-4-5": "claude-sonnet-4-5-20250514",
+                "sonnet": "claude-sonnet-4-5-20250514",
+                "claude-haiku-4-5": "claude-haiku-4-5-20250514",
+                "haiku": "claude-haiku-4-5-20250514",
+                "claude-opus-4-5": "claude-opus-4-5-20250514",
+                "opus": "claude-opus-4-5-20250514",
+                "claude": "claude-sonnet-4-5-20250514",
+            }
+            self.api_model = model_mapping.get(self.model_name.lower(), "claude-sonnet-4-5-20250514")
+
+            self.logger.info(f"Anthropic client initialized (model: {self.api_model})")
+
+        except ImportError:
+            raise ImportError(
+                "Anthropic library not installed. Install with: pip install anthropic"
+            )
+
+    def _init_openai_client(self, openai_client=None):
+        """Initialize OpenAI client"""
+        if openai_client:
+            self.client = openai_client
+        else:
+            from openai import AsyncOpenAI
+            self.client = AsyncOpenAI()
+
+        self.provider = "openai"
+        self.api_model = self.model_name
+
+        self.logger.info(f"OpenAI client initialized (model: {self.api_model})")
+
+    def _get_tools_openai(self) -> List[Dict]:
+        """Get tools in OpenAI format"""
+        return [
             {
                 "type": "function",
                 "function": {
@@ -77,6 +158,50 @@ class CodeGeneratorAgent(BaseAgent):
             }
         ]
 
+    def _get_tools_anthropic(self) -> List[Dict]:
+        """Get tools in Anthropic format"""
+        return [
+            {
+                "name": "search_documentation",
+                "description": (
+                    "Busca documentación oficial de librerías Python en la base de conocimiento. "
+                    "Usa esto cuando necesites ejemplos de código, sintaxis, o mejores prácticas para "
+                    "librerías como PyMuPDF, Google Cloud Vision, pandas, etc."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "library": {
+                            "type": "string",
+                            "description": (
+                                "Nombre de la librería a buscar. "
+                                "Valores disponibles: 'pymupdf', 'google_vision', 'imap', 'smtp', 'postgres', 'regex'. "
+                                "Para emails: usa 'imap' para leer o 'smtp' para enviar. "
+                                "Para OCR: usa 'google_vision'"
+                            ),
+                            "enum": ["pymupdf", "google_vision", "imap", "smtp", "postgres", "regex"]
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": (
+                                "Qué buscar en la documentación (en inglés). "
+                                "Ejemplos: 'extract text from PDF', 'read invoice data', "
+                                "'send email with attachment'. "
+                                "⚠️ Para google_vision: SIEMPRE incluir 'authentication' o 'credentials' en la query "
+                                "(ej: 'OCR from PDF with authentication', 'document_text_detection with credentials')"
+                            )
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Número de ejemplos a retornar (mínimo 3 para tener contexto completo)",
+                            "default": 3
+                        }
+                    },
+                    "required": ["library", "query"]
+                }
+            }
+        ]
+
     async def execute(
         self,
         task: str,
@@ -112,61 +237,13 @@ class CodeGeneratorAgent(BaseAgent):
             self.logger.info(f"🔍 DEBUG - Task: '{task}'")
             self.logger.info(f"🔍 DEBUG - Node ID: '{node_id}', Node Type: '{node_type}'")
             self.logger.info(f"🔍 DEBUG - Error history count: {len(error_history or [])}")
+            self.logger.info(f"🔍 DEBUG - Using model: {self.model_name} (provider: {self.provider})")
 
             # Combinar functional + config para el prompt
-            # El functional_context ya viene truncado
-            # El config_context se pasa completo (database_schemas, credenciales, etc.)
             combined_context = {**functional_context, **config_context}
 
-            # 🔍 DEBUG: Mostrar todas las keys y sus valores
+            # 🔍 DEBUG: Mostrar keys del contexto
             self.logger.info(f"🔍 DEBUG - Keys in functional_context: {list(functional_context.keys())}")
-            for key in functional_context:
-                value = functional_context[key]
-                if isinstance(value, str):
-                    self.logger.info(f"   - {key}: {type(value).__name__} of {len(value)} chars")
-                    if len(value) < 100:
-                        self.logger.info(f"     Value: {value}")
-                    else:
-                        self.logger.info(f"     Preview: {value[:100]}...")
-                else:
-                    self.logger.info(f"   - {key}: {type(value).__name__}")
-
-            # 🔍 DEBUG: Buscar CUALQUIER key que podría tener el texto del PDF
-            possible_text_keys = ['extracted_text', 'ocr_text', 'pdf_text', 'document_text', 'text']
-            text_key_found = None
-
-            for key in possible_text_keys:
-                if key in combined_context:
-                    text_key_found = key
-                    text_value = combined_context[key]
-
-                    if isinstance(text_value, str):
-                        text_length = len(text_value)
-                        text_preview = text_value[:200]
-                        self.logger.info(f"🔍 DEBUG - Found text in key '{key}': {text_length} chars")
-                        self.logger.info(f"🔍 DEBUG - Text preview: {text_preview}...")
-
-                        # Check if it contains the expected total
-                        if '1.657,83' in text_value or '1657.83' in text_value:
-                            self.logger.info("✅ DEBUG - Text contains '1.657,83' or '1657.83' (expected total)")
-                        else:
-                            self.logger.warning(f"⚠️ DEBUG - Text in '{key}' does NOT contain expected total '1.657,83'")
-
-                        if 'TOTAL' in text_value:
-                            self.logger.info(f"✅ DEBUG - Text in '{key}' contains 'TOTAL'")
-                            # Show context around TOTAL
-                            import re
-                            total_matches = list(re.finditer(r'.{0,50}TOTAL.{0,50}', text_value))
-                            self.logger.info(f"🔍 DEBUG - Found {len(total_matches)} 'TOTAL' occurrences:")
-                            for i, match in enumerate(total_matches[:5]):  # Show first 5
-                                self.logger.info(f"   [{i+1}] {match.group()}")
-                    else:
-                        self.logger.warning(f"⚠️ DEBUG - Key '{key}' exists but is not a string: {type(text_value).__name__}")
-                    break
-
-            if not text_key_found:
-                self.logger.warning(f"⚠️ DEBUG - NO text key found! Looked for: {possible_text_keys}")
-                self.logger.warning(f"⚠️ DEBUG - Available keys in context: {list(combined_context.keys())}")
 
             # Construir prompt
             prompt = self._build_prompt(
@@ -178,56 +255,23 @@ class CodeGeneratorAgent(BaseAgent):
                 node_id=node_id
             )
 
-            # Llamar a OpenAI con tool calling
-            self.logger.info("Generando código con IA...")
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "Eres un generador experto de código Python. Generas código limpio, eficiente y bien documentado."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                tools=self.tools,
-                temperature=0.6
-            )
-
-            message = response.choices[0].message
-
-            # Si hay tool calls, ejecutarlos
-            tool_calls_info = []
-            if message.tool_calls:
-                self.logger.info(f"Ejecutando {len(message.tool_calls)} tool calls...")
-                docs_context = await self._handle_tool_calls(message.tool_calls)
-                tool_calls_info = [
-                    {
-                        "function": tc.function.name,
-                        "arguments": json.loads(tc.function.arguments)
-                    }
-                    for tc in message.tool_calls
-                ]
-
-                # Regenerar código con la documentación
-                response = await self._regenerate_with_docs(prompt, docs_context)
-                message = response.choices[0].message
-
-            # Extraer código
-            code = self._extract_code(message.content)
+            # Generar código con el provider apropiado
+            if self.provider == "anthropic":
+                code, tool_calls_info = await self._generate_with_anthropic(prompt)
+            else:
+                code, tool_calls_info = await self._generate_with_openai(prompt)
 
             execution_time_ms = (time.time() - start_time) * 1000
 
-            self.logger.info(f"Código generado ({len(code)} caracteres)")
+            self.logger.info(f"Código generado ({len(code)} caracteres) en {execution_time_ms:.0f}ms")
 
             return self._create_response(
                 success=True,
                 data={
                     "code": code,
                     "tool_calls": tool_calls_info,
-                    "model": self.model
+                    "model": self.model_name,
+                    "provider": self.provider
                 },
                 execution_time_ms=execution_time_ms
             )
@@ -240,7 +284,256 @@ class CodeGeneratorAgent(BaseAgent):
                 execution_time_ms=0.0
             )
 
-    # Método _summarize_value() eliminado - ahora se usa truncate_for_llm() del Orchestrator
+    async def _generate_with_anthropic(self, prompt: str) -> tuple[str, List[Dict]]:
+        """Generate code using Anthropic API with tool calling"""
+
+        tool_calls_info = []
+        messages = [{"role": "user", "content": prompt}]
+        tools = self._get_tools_anthropic()
+
+        system_message = "Eres un generador experto de código Python. Generas código limpio, eficiente y bien documentado."
+
+        max_tool_iterations = 5
+
+        for iteration in range(max_tool_iterations):
+            self.logger.info(f"🔄 Anthropic iteration {iteration + 1}/{max_tool_iterations}")
+
+            # Run synchronous Anthropic call in executor
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.messages.create(
+                    model=self.api_model,
+                    max_tokens=8192,
+                    system=system_message,
+                    messages=messages,
+                    tools=tools,
+                    temperature=0.6
+                )
+            )
+
+            # Check for tool use
+            tool_use_blocks = [block for block in response.content if block.type == "tool_use"]
+            text_blocks = [block for block in response.content if block.type == "text"]
+
+            if tool_use_blocks:
+                self.logger.info(f"🔧 Anthropic requested {len(tool_use_blocks)} tool call(s)")
+
+                # Add assistant response to messages
+                messages.append({"role": "assistant", "content": response.content})
+
+                # Execute tools and collect results
+                tool_results = []
+
+                for tool_use in tool_use_blocks:
+                    function_name = tool_use.name
+                    arguments = tool_use.input
+                    tool_use_id = tool_use.id
+
+                    self.logger.info(f"Executing tool: {function_name}({arguments})")
+
+                    if function_name == "search_documentation":
+                        library = arguments.get("library")
+                        query = arguments.get("query")
+                        top_k = arguments.get("top_k", 3)
+
+                        # Execute search
+                        result = await self._search_docs(library, query, top_k)
+
+                        tool_calls_info.append({
+                            "function": function_name,
+                            "arguments": arguments,
+                            "result_preview": result[:500] if result else None
+                        })
+
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": result
+                        })
+                    else:
+                        error_msg = f"Unknown tool: {function_name}"
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": error_msg,
+                            "is_error": True
+                        })
+
+                # Add tool results to messages
+                messages.append({"role": "user", "content": tool_results})
+                continue
+
+            # No tool calls - extract code from text blocks
+            raw_code = ""
+            for block in response.content:
+                if block.type == "text":
+                    raw_code += block.text
+
+            if not raw_code:
+                raise Exception("Anthropic returned empty response")
+
+            code = self._extract_code(raw_code)
+            return code, tool_calls_info
+
+        raise Exception(f"Exceeded max tool iterations ({max_tool_iterations})")
+
+    async def _generate_with_openai(self, prompt: str) -> tuple[str, List[Dict]]:
+        """Generate code using OpenAI API with tool calling"""
+
+        tool_calls_info = []
+        tools = self._get_tools_openai()
+
+        response = await self.client.chat.completions.create(
+            model=self.api_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Eres un generador experto de código Python. Generas código limpio, eficiente y bien documentado."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            tools=tools,
+            temperature=0.6
+        )
+
+        message = response.choices[0].message
+
+        # If there are tool calls, execute them
+        if message.tool_calls:
+            self.logger.info(f"Ejecutando {len(message.tool_calls)} tool calls...")
+            docs_context = await self._handle_tool_calls_openai(message.tool_calls)
+            tool_calls_info = [
+                {
+                    "function": tc.function.name,
+                    "arguments": json.loads(tc.function.arguments)
+                }
+                for tc in message.tool_calls
+            ]
+
+            # Regenerate with docs
+            response = await self._regenerate_with_docs_openai(prompt, docs_context)
+            message = response.choices[0].message
+
+        code = self._extract_code(message.content)
+        return code, tool_calls_info
+
+    async def _handle_tool_calls_openai(self, tool_calls) -> str:
+        """Execute OpenAI tool calls for documentation search"""
+        docs = []
+
+        for tool_call in tool_calls:
+            if tool_call.function.name == "search_documentation":
+                args = json.loads(tool_call.function.arguments)
+                library = args.get("library")
+                query = args.get("query")
+                top_k = args.get("top_k", 3)
+
+                self.logger.info(f"🔍 Buscando docs de {library}: '{query}' (top_k={top_k})")
+
+                doc = await self._search_docs(library, query, top_k)
+                docs.append(f"# Documentación de {library} - {query}\n\n{doc}")
+
+        return "\n\n".join(docs)
+
+    async def _regenerate_with_docs_openai(self, original_prompt: str, docs: str):
+        """Regenerate code with documentation (OpenAI)"""
+
+        enhanced_prompt = f"""{original_prompt}
+
+**Documentación relevante:**
+{docs}
+
+Usa esta documentación para generar el código correcto.
+"""
+
+        return await self.client.chat.completions.create(
+            model=self.api_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Eres un generador experto de código Python."
+                },
+                {
+                    "role": "user",
+                    "content": enhanced_prompt
+                }
+            ],
+            temperature=0.6
+        )
+
+    async def _search_docs(self, library: str, query: str, top_k: int = 3) -> str:
+        """
+        Busca documentación usando nova-rag service.
+
+        Args:
+            library: Librería a buscar (pymupdf, google_vision, etc.)
+            query: Qué buscar
+            top_k: Número de resultados (default: 3)
+
+        Returns:
+            Documentación formateada para el LLM
+        """
+        if not self.rag_client:
+            self.logger.warning("RAGClient not available, skipping doc search")
+            return f"[Documentación de {library} no disponible - RAG client no configurado]"
+
+        try:
+            all_results = []
+
+            if library == "google_vision":
+                self.logger.info(f"🔍 Google Vision detectado - haciendo búsqueda dual (query + auth)")
+
+                results_query = await self.rag_client.search(
+                    query=query,
+                    library=library,
+                    top_k=top_k
+                )
+                all_results.extend(results_query or [])
+
+                results_auth = await self.rag_client.search(
+                    query="authentication credentials service account E2B sandbox",
+                    library=library,
+                    top_k=2
+                )
+                all_results.extend(results_auth or [])
+
+                results_workflow = await self.rag_client.search(
+                    query="complete workflow PDF OCR extract",
+                    library=library,
+                    top_k=2
+                )
+                all_results.extend(results_workflow or [])
+
+                self.logger.info(f"✅ Búsqueda dual completada: {len(all_results)} resultados totales")
+
+            else:
+                all_results = await self.rag_client.search(
+                    query=query,
+                    library=library,
+                    top_k=top_k
+                )
+
+            if not all_results:
+                return f"[No se encontró documentación para {library} sobre '{query}']"
+
+            formatted_docs = []
+            for i, result in enumerate(all_results, 1):
+                score_pct = result['score'] * 100
+                formatted_docs.append(
+                    f"### Ejemplo {i} (relevancia: {score_pct:.0f}%)\n"
+                    f"Fuente: {result['source']} - {result['topic']}\n\n"
+                    f"{result['text']}\n"
+                )
+
+            return "\n".join(formatted_docs)
+
+        except Exception as e:
+            self.logger.error(f"Error buscando docs en RAG: {e}")
+            return f"[Error buscando documentación de {library}: {str(e)}]"
 
     def _build_prompt(
         self,
@@ -253,8 +546,6 @@ class CodeGeneratorAgent(BaseAgent):
     ) -> str:
         """Construye el prompt para generación de código"""
 
-        # El contexto ya viene truncado por el Orchestrator
-        # Solo necesitamos serializarlo para el prompt
         context_json = json.dumps(context, indent=2, ensure_ascii=False)
 
         prompt = f"""Genera código Python que resuelve esta tarea:
@@ -302,8 +593,18 @@ Los siguientes insights fueron obtenidos al analizar la data en nodos anteriores
 {err.get('failed_code')}
 ```
 """
-            prompt += """
-⚠️ IMPORTANTE: Analiza el código anterior y corrige los errores específicos.
+            prompt += f"""
+⚠️ **ANÁLISIS CRÍTICO REQUERIDO** (intento {len(error_history) + 1}):
+
+El código anterior falló. ANTES de escribir código nuevo, DEBES:
+
+1. **LEER el mensaje de error cuidadosamente** - ¿Qué dice exactamente que está mal?
+2. **ANALIZAR tu código anterior** - ¿Qué línea específica causó el problema?
+3. **ENTENDER la causa raíz** - ¿Por qué tu lógica produjo el resultado incorrecto?
+4. **CAMBIAR TU ESTRATEGIA** - Si el enfoque falló {len(error_history)} veces, necesitas una aproximación DIFERENTE
+
+🚫 NO repitas el mismo código con cambios cosméticos.
+✅ SÍ piensa: "¿Qué asunción incorrecta hice? ¿Qué caso no consideré?"
 """
 
         prompt += """
@@ -321,13 +622,10 @@ Los siguientes insights fueron obtenidos al analizar la data en nodos anteriores
    - Para GUARDAR archivos: encode con base64 → context['file_data'] = base64.b64encode(bytes).decode()
    - Para LEER archivos: decode → bytes = base64.b64decode(context['file_data'])
 
-
 """
 
         # Add special instructions for DecisionNode
         if node_type == "decision":
-            # Use node_id directly as the decision key
-            # Note: node_id already contains descriptive name (e.g., "has_pdf_decision")
             decision_key = node_id if node_id else "branch_decision"
 
             prompt += f"""
@@ -397,132 +695,6 @@ print(json.dumps({
 """
 
         return prompt
-
-    async def _handle_tool_calls(self, tool_calls) -> str:
-        """
-        Ejecuta las tool calls para buscar documentación via RAG.
-
-        Retorna: String con la documentación encontrada
-        """
-        docs = []
-
-        for tool_call in tool_calls:
-            if tool_call.function.name == "search_documentation":
-                args = json.loads(tool_call.function.arguments)
-                library = args.get("library")
-                query = args.get("query")
-                top_k = args.get("top_k", 3)  # Default: 3 results
-
-                self.logger.info(f"🔍 Buscando docs de {library}: '{query}' (top_k={top_k})")
-
-                # Buscar documentación en RAG
-                doc = await self._search_docs(library, query, top_k)
-                docs.append(f"# Documentación de {library} - {query}\n\n{doc}")
-
-        return "\n\n".join(docs)
-
-    async def _search_docs(self, library: str, query: str, top_k: int = 3) -> str:
-        """
-        Busca documentación usando nova-rag service.
-
-        Args:
-            library: Librería a buscar (pymupdf, google_vision, etc.)
-            query: Qué buscar
-            top_k: Número de resultados (default: 3)
-
-        Returns:
-            Documentación formateada para el LLM
-        """
-        if not self.rag_client:
-            self.logger.warning("RAGClient not available, skipping doc search")
-            return f"[Documentación de {library} no disponible - RAG client no configurado]"
-
-        try:
-            # 🔥 ESPECIAL: Para google_vision, siempre buscar autenticación ADEMÁS de la query original
-            # Esto garantiza que el LLM tenga ejemplos de cómo autenticar el cliente
-            all_results = []
-
-            if library == "google_vision":
-                self.logger.info(f"🔍 Google Vision detectado - haciendo búsqueda dual (query + auth)")
-
-                # 1. Búsqueda original (e.g., "OCR from PDF")
-                results_query = await self.rag_client.search(
-                    query=query,
-                    library=library,
-                    top_k=top_k
-                )
-                all_results.extend(results_query or [])
-
-                # 2. Búsqueda de autenticación (SIEMPRE)
-                results_auth = await self.rag_client.search(
-                    query="authentication credentials service account E2B sandbox",
-                    library=library,
-                    top_k=2  # Solo 2 ejemplos de auth
-                )
-                all_results.extend(results_auth or [])
-
-                # 3. Búsqueda de workflow completo
-                results_workflow = await self.rag_client.search(
-                    query="complete workflow PDF OCR extract",
-                    library=library,
-                    top_k=2
-                )
-                all_results.extend(results_workflow or [])
-
-                self.logger.info(f"✅ Búsqueda dual completada: {len(all_results)} resultados totales")
-
-            else:
-                # Para otras librerías, búsqueda normal
-                all_results = await self.rag_client.search(
-                    query=query,
-                    library=library,
-                    top_k=top_k
-                )
-
-            if not all_results:
-                return f"[No se encontró documentación para {library} sobre '{query}']"
-
-            # Formatear resultados para el LLM
-            formatted_docs = []
-            for i, result in enumerate(all_results, 1):
-                score_pct = result['score'] * 100
-                formatted_docs.append(
-                    f"### Ejemplo {i} (relevancia: {score_pct:.0f}%)\n"
-                    f"Fuente: {result['source']} - {result['topic']}\n\n"
-                    f"{result['text']}\n"
-                )
-
-            return "\n".join(formatted_docs)
-
-        except Exception as e:
-            self.logger.error(f"Error buscando docs en RAG: {e}")
-            return f"[Error buscando documentación de {library}: {str(e)}]"
-
-    async def _regenerate_with_docs(self, original_prompt: str, docs: str):
-        """Regenera código con la documentación encontrada"""
-
-        enhanced_prompt = f"""{original_prompt}
-
-**Documentación relevante:**
-{docs}
-
-Usa esta documentación para generar el código correcto.
-"""
-
-        return await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Eres un generador experto de código Python."
-                },
-                {
-                    "role": "user",
-                    "content": enhanced_prompt
-                }
-            ],
-            temperature=0.6
-        )
 
     def _extract_code(self, content: str) -> str:
         """Extrae código Python del mensaje (limpia markdown si existe)"""
