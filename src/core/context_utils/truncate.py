@@ -128,6 +128,34 @@ def _truncate_value(
     return f"<{type(value).__name__}>"
 
 
+def _is_binary_string(value: str) -> bool:
+    """
+    Detecta si un string es binario/base64 vs texto legible.
+
+    Args:
+        value: String a analizar
+
+    Returns:
+        True si es binario/base64, False si es texto legible
+    """
+    # Sample primeros 500 chars para evitar analizar strings gigantes
+    sample = value[:500]
+
+    # 1. Detectar base64 (PDFs, imágenes en base64)
+    base64_chars = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
+    if len(sample) > 100:
+        base64_ratio = sum(c in base64_chars for c in sample) / len(sample)
+        if base64_ratio > 0.95:  # >95% son caracteres base64
+            return True
+
+    # 2. Detectar caracteres no imprimibles (binarios)
+    printable_ratio = sum(c.isprintable() or c.isspace() for c in sample) / len(sample)
+    if printable_ratio < 0.80:  # <80% imprimibles = probablemente binario
+        return True
+
+    return False
+
+
 def _truncate_string(value: str) -> str:
     """
     Trunca strings según tipo de contenido detectado.
@@ -171,9 +199,14 @@ def _truncate_string(value: str) -> str:
         else:
             return f"<CSV data: {len(value)} chars, ~{line_count} rows>"
 
-    # 5. Strings muy largos (>20K chars)
+    # 5. Strings muy largos (>20K chars): detectar si es binario o texto legible
     if len(value) > TEXT_THRESHOLD:
-        return f"<long text: {len(value)} chars, preview: {value[:200]}...>"
+        # Si es binario/base64, truncar
+        if _is_binary_string(value):
+            return f"<binary string: {len(value)} chars, preview: {value[:200]}...>"
+        # Si es texto legible, enviar completo (para análisis LLM)
+        else:
+            return value
 
     # 6. Strings normales: pasar completos
     return value
