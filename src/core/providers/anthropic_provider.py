@@ -457,14 +457,35 @@ class AnthropicProvider(ModelProvider):
         """Remove markdown code blocks from AI output."""
         import re
 
-        # Remove markdown code blocks
-        code_block_pattern = r'```(?:python)?\s*\n(.*?)\n```'
-        matches = re.findall(code_block_pattern, code, re.DOTALL)
+        # Try multiple patterns for markdown code blocks (order matters: most specific first)
+        patterns = [
+            # Pattern 1: Standard with newlines
+            r'```python\s*\n(.*?)\n```',
+            # Pattern 2: Without language specifier
+            r'```\s*\n(.*?)\n```',
+            # Pattern 3: Flexible - handles missing newlines (Sonnet sometimes does this)
+            r'```python\s*(.*?)```',
+            r'```\s*(.*?)```',
+        ]
 
-        if matches:
-            code = matches[0]
+        for pattern in patterns:
+            matches = re.findall(pattern, code, re.DOTALL)
+            if matches:
+                code = matches[0].strip()
+                break
 
-        # Remove explanation lines
+        # Fallback: if code still starts with ``` remove it manually
+        if code.startswith('```'):
+            lines = code.split('\n')
+            # Remove first line (```python or ```)
+            if lines:
+                lines = lines[1:]
+            # Remove last line if it's just ```
+            if lines and lines[-1].strip() == '```':
+                lines = lines[:-1]
+            code = '\n'.join(lines)
+
+        # Remove explanation lines that sometimes appear
         lines = code.split('\n')
         cleaned_lines = []
 
@@ -478,6 +499,8 @@ class AnthropicProvider(ModelProvider):
                 "the code above",
                 "explanation:",
                 "note:",
+                "aquí está el código",
+                "este código",
             ]):
                 continue
 
