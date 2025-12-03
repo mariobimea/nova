@@ -336,7 +336,11 @@ class CachedExecutor(ExecutorStrategy):
         # ═══════════════════════════════════════════════════════
         if self.cache_manager and cache_key_inicial:
             try:
-                cached_entry = await self.cache_manager.lookup_by_key(cache_key_inicial)
+                # Pass workflow_id for cache isolation (only match same workflow)
+                cached_entry = await self.cache_manager.lookup_by_key(
+                    cache_key_inicial,
+                    workflow_id=workflow_id
+                )
 
                 if cached_entry:
                     # ✅ CACHE HIT - Execute cached code directly

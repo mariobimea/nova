@@ -78,7 +78,8 @@ class CodeCacheManager:
 
     async def lookup_by_key(
         self,
-        cache_key: str
+        cache_key: str,
+        workflow_id: Optional[int] = None
     ) -> Optional[CodeCache]:
         """
         Lookup code in cache using pre-calculated cache key.
@@ -88,17 +89,25 @@ class CodeCacheManager:
 
         Args:
             cache_key: Pre-calculated SHA256 cache key
+            workflow_id: Optional workflow ID to filter results (cache isolation)
 
         Returns:
             CodeCache entry if found, None otherwise
         """
-        # Query database
-        entry = self.db.query(CodeCache).filter(
+        # Build query with workflow_id filter if provided
+        query = self.db.query(CodeCache).filter(
             CodeCache.cache_key == cache_key
-        ).first()
+        )
+
+        # Add workflow_id filter for cache isolation
+        if workflow_id is not None:
+            query = query.filter(CodeCache.workflow_id == workflow_id)
+            logger.debug(f"Filtering exact cache by workflow_id={workflow_id}")
+
+        entry = query.first()
 
         if entry:
-            logger.info(f"🎯 Cache HIT: {cache_key[:16]}... (reused {entry.times_reused} times, {entry.success_rate:.1%} success rate)")
+            logger.info(f"🎯 Cache HIT: {cache_key[:16]}... (reused {entry.times_reused} times, {entry.success_rate:.1%} success rate, workflow_id={entry.workflow_id})")
 
             # Update last_used_at
             entry.last_used_at = datetime.utcnow()
@@ -106,7 +115,7 @@ class CodeCacheManager:
 
             return entry
         else:
-            logger.info(f"❌ Cache MISS: {cache_key[:16]}...")
+            logger.info(f"❌ Cache MISS: {cache_key[:16]}... (workflow_id={workflow_id})")
             return None
 
     async def save(
