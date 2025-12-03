@@ -236,6 +236,7 @@ class CachedExecutor(ExecutorStrategy):
         timeout: Optional[int] = None,
         workflow: Optional[Dict[str, Any]] = None,
         node: Optional[Dict[str, Any]] = None,
+        workflow_id: Optional[int] = None,  # Database workflow ID for cache isolation
         **kwargs
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """
@@ -258,6 +259,8 @@ class CachedExecutor(ExecutorStrategy):
             timeout: Execution timeout in seconds (for E2B)
             workflow: Optional workflow dictionary (unused in multi-agent)
             node: Optional node dictionary (unused in multi-agent)
+            workflow_id: Database workflow ID for cache isolation (ensures code is only
+                         cached/retrieved within the same workflow)
             **kwargs: Additional executor-specific parameters
 
         Returns:
@@ -309,10 +312,9 @@ class CachedExecutor(ExecutorStrategy):
         else:
             logger.info(f"   Using provided ContextManager with {len(context_manager.get_summary().analysis_history)} previous analyses")
 
-        # Extract node_type, node_id, workflow_id
+        # Extract node_type, node_id
         node_type = None
         node_id = None
-        workflow_id = None
 
         if node and isinstance(node, dict):
             node_type = node.get("type")
@@ -320,8 +322,9 @@ class CachedExecutor(ExecutorStrategy):
             logger.info(f"   Node type: {node_type}")
             logger.info(f"   Node ID: {node_id}")
 
-        if workflow and isinstance(workflow, dict):
-            workflow_id = workflow.get("id")
+        # workflow_id is now passed directly as parameter (database ID)
+        # No longer extracted from workflow dict which only has 'name' not 'id'
+        logger.info(f"   Workflow ID: {workflow_id}")
 
         # ═══════════════════════════════════════════════════════
         # 🔑 CALCULAR CACHE KEY AL INICIO (antes de cualquier modificación)

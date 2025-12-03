@@ -254,7 +254,8 @@ class GraphEngine:
         node: NodeType,
         context: ContextManager,
         workflow_definition: Dict[str, Any],
-        execution_id: Optional[int] = None
+        execution_id: Optional[int] = None,
+        workflow_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Execute a single node and return execution metadata.
@@ -264,6 +265,7 @@ class GraphEngine:
             context: Current workflow context
             workflow_definition: Complete workflow definition (for model resolution)
             execution_id: Optional execution ID for chain_of_work logging
+            workflow_id: Database workflow ID for cache isolation
 
         Note:
             cache_context is built dynamically inside this method for each ActionNode
@@ -343,6 +345,7 @@ class GraphEngine:
                     timeout=node.timeout,
                     workflow=workflow_definition,
                     node={"id": node.id, "type": "action", "model": getattr(node, "model", None)},
+                    workflow_id=workflow_id,  # Database ID for cache isolation
                     cache_context=current_cache_context  # Pass CURRENT cache_context (not initial)
                 )
 
@@ -418,6 +421,7 @@ class GraphEngine:
                     timeout=node.timeout,
                     workflow=workflow_definition,
                     node={"id": node.id, "type": "decision", "model": getattr(node, "model", None)},
+                    workflow_id=workflow_id,  # Database ID for cache isolation
                     cache_context=current_cache_context  # Pass CURRENT cache_context
                 )
 
@@ -600,7 +604,8 @@ class GraphEngine:
                     current_node,
                     context,
                     workflow_definition,
-                    execution.id if execution else None
+                    execution.id if execution else None,
+                    workflow_id=workflow_id  # Pass database ID for cache isolation
                 )
                 execution_trace.append(metadata)
 
