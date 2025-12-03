@@ -136,41 +136,70 @@ class ContextSummary(BaseModel):
 
     def get_all_insights(self) -> Dict[str, Any]:
         """
-        Extract ONLY insights from context_schema (for CodeGenerator).
+        Extract ALL insights from context_schema (for CodeGenerator).
 
-        This method extracts the 'insights' field from each entry in context_schema,
-        providing CodeGenerator with analyzed information about the data without
-        the full schema structure.
+        Supports two formats:
+        1. New format: entries with type="analysis_result" contain full insights dict
+           Key format: "_analysis_{node_id}"
+        2. Legacy format: individual keys with "insights" field
 
         Returns:
-            Dict mapping keys to their insights
+            Dict with all accumulated insights, organized by node_id
 
-        Example:
+        Example (new format):
             >>> summary.context_schema = {
-            ...     "pdf_data": {
-            ...         "type": "base64",
-            ...         "insights": {"has_text": False, "pages": 5}
+            ...     "_analysis_extract_pdf": {
+            ...         "type": "analysis_result",
+            ...         "analyzed_keys": ["pdf_data", "email_attachments"],
+            ...         "insights": {
+            ...             "document_type": "invoice",
+            ...             "has_amounts": True,
+            ...             "detected_total": 279.00
+            ...         }
             ...     },
-            ...     "csv_data": {
-            ...         "type": "string",
-            ...         "insights": {"columns": ["name", "email"], "rows": 150}
-            ...     },
-            ...     "simple_value": {
-            ...         "type": "string"
-            ...         # No insights field
+            ...     "_analysis_validate_data": {
+            ...         "type": "analysis_result",
+            ...         "analyzed_keys": ["extracted_text"],
+            ...         "insights": {
+            ...             "language": "es",
+            ...             "contains_numbers": True
+            ...         }
             ...     }
             ... }
             >>> summary.get_all_insights()
             {
-                "pdf_data": {"has_text": False, "pages": 5},
-                "csv_data": {"columns": ["name", "email"], "rows": 150}
+                "extract_pdf": {
+                    "analyzed_keys": ["pdf_data", "email_attachments"],
+                    "insights": {"document_type": "invoice", "has_amounts": True, ...}
+                },
+                "validate_data": {
+                    "analyzed_keys": ["extracted_text"],
+                    "insights": {"language": "es", "contains_numbers": True}
+                }
             }
         """
-        insights = {}
+        all_insights = {}
+
         for key, schema_entry in self.context_schema.items():
-            if isinstance(schema_entry, dict) and "insights" in schema_entry:
-                insights[key] = schema_entry["insights"]
-        return insights
+            if not isinstance(schema_entry, dict):
+                continue
+
+            # New format: _analysis_{node_id} entries
+            if key.startswith("_analysis_") and schema_entry.get("type") == "analysis_result":
+                node_id = key.replace("_analysis_", "")
+                all_insights[node_id] = {
+                    "analyzed_keys": schema_entry.get("analyzed_keys", []),
+                    "insights": schema_entry.get("insights", {})
+                }
+            # Legacy format: individual keys with insights field
+            elif "insights" in schema_entry and not key.startswith("_"):
+                # Group under "legacy" to distinguish
+                if "legacy" not in all_insights:
+                    all_insights["legacy"] = {"analyzed_keys": [], "insights": {}}
+                all_insights["legacy"]["analyzed_keys"].append(key)
+                all_insights["legacy"]["insights"][key] = schema_entry["insights"]
+
+        return all_insights
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""

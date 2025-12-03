@@ -545,22 +545,28 @@ class MultiAgentOrchestrator:
                             "suggestions": insights_val.data.get("suggestions", [])
                         }
 
-                        # 🔥 NUEVO: Registrar análisis en Context Summary
+                        # 🔥 Registrar análisis en Context Summary
                         # Esto permite análisis incremental en el siguiente nodo
                         if not data_analysis.data.get("skipped", False):
                             analyzed_keys = data_analysis.data.get("analyzed_keys", [])
                             if analyzed_keys:
-                                # Generar schema simple de los insights
+                                # Guardar insights COMPLETOS bajo el node_id
+                                # No mapeamos por key individual porque el LLM genera
+                                # insights con estructura libre (no necesariamente las mismas keys)
+                                current_node_id = node_id or "data_analysis"
                                 schema = {
-                                    key: {"type": "analyzed", "insights": insights.get(key, {})}
-                                    for key in analyzed_keys
+                                    f"_analysis_{current_node_id}": {
+                                        "type": "analysis_result",
+                                        "analyzed_keys": analyzed_keys,
+                                        "insights": insights  # Todos los insights, sin filtrar
+                                    }
                                 }
                                 context_manager.add_analysis(
-                                    node_id=node_id or "data_analysis",
+                                    node_id=current_node_id,
                                     analyzed_keys=analyzed_keys,
                                     schema=schema
                                 )
-                                self.logger.info(f"✅ Registered analysis for keys: {analyzed_keys}")
+                                self.logger.info(f"✅ Registered analysis for keys: {analyzed_keys} with {len(insights)} insights")
 
                                 # 🔥 NUEVO: Actualizar _analyzed_keys en el contexto
                                 # Esto permite al InputAnalyzer saber qué keys ya fueron analizadas
@@ -613,18 +619,23 @@ class MultiAgentOrchestrator:
                     functional_context_truncated = truncate_for_llm(functional_context)
                     config_context = context_manager.get_config_context()  # NO truncar (schemas completos)
 
-                    # Obtener insights acumulados
+                    # Obtener insights acumulados (de nodos anteriores)
                     accumulated_insights = context_manager.get_summary().get_all_insights()
+
+                    # Insights del nodo actual (frescos del DataAnalyzer)
+                    current_data_insights = context_state.data_insights
 
                     self.logger.info(f"   Functional keys: {len(functional_context)}")
                     self.logger.info(f"   Config keys: {len(config_context)}")
-                    self.logger.info(f"   Accumulated insights: {len(accumulated_insights)} keys")
+                    self.logger.info(f"   Accumulated insights: {len(accumulated_insights)} nodes")
+                    self.logger.info(f"   Current data_insights: {len(current_data_insights) if current_data_insights else 0} keys")
 
                     code_gen = await self.code_generator.execute(
                         task=task,
                         functional_context=functional_context_truncated,
                         config_context=config_context,
                         accumulated_insights=accumulated_insights,
+                        data_insights=current_data_insights,  # 🔥 NEW: insights frescos del nodo actual
                         error_history=execution_state.errors,
                         node_type=node_type,
                         node_id=node_id

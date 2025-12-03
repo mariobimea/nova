@@ -219,6 +219,7 @@ class CodeGeneratorAgent(BaseAgent):
         functional_context: Dict,
         config_context: Dict,
         accumulated_insights: Dict,
+        data_insights: Dict = None,
         error_history: List[Dict] = None,
         node_type: Optional[str] = None,
         node_id: Optional[str] = None
@@ -230,7 +231,8 @@ class CodeGeneratorAgent(BaseAgent):
             task: Tarea a resolver
             functional_context: Contexto funcional (YA truncado, sin config ni metadata)
             config_context: Contexto de configuración (credenciales, DB schemas, etc.)
-            accumulated_insights: Insights acumulados de TODOS los análisis previos
+            accumulated_insights: Insights acumulados de nodos ANTERIORES (organizado por node_id)
+            data_insights: Insights frescos del DataAnalyzer del nodo ACTUAL
             error_history: Errores de intentos previos (para retry)
             node_type: Tipo de nodo ("action", "decision", etc.) - opcional
             node_id: ID del nodo (usado para DecisionNodes) - opcional
@@ -261,6 +263,7 @@ class CodeGeneratorAgent(BaseAgent):
                 task,
                 combined_context,
                 accumulated_insights,
+                data_insights,
                 error_history or [],
                 node_type=node_type,
                 node_id=node_id
@@ -551,6 +554,7 @@ Usa esta documentación para generar el código correcto.
         task: str,
         context: Dict,
         accumulated_insights: Dict,
+        data_insights: Dict,
         error_history: List[Dict],
         node_type: Optional[str] = None,
         node_id: Optional[str] = None
@@ -571,18 +575,27 @@ La variable `context` es un diccionario que YA EXISTE con estas keys:
 NO copies estos valores al código. Usa `context['key']` para acceder a los valores reales.
 """
 
-        # Agregar insights acumulados (si existen)
+        # 🔥 Agregar data_insights del nodo ACTUAL (frescos del DataAnalyzer)
+        if data_insights:
+            data_insights_json = json.dumps(data_insights, indent=2, ensure_ascii=False)
+            self.logger.info(f"📊 CodeGenerator recibe data_insights del nodo actual: {len(data_insights)} keys")
+            prompt += """
+**🔍 Insights del análisis de datos (nodo actual):**
+El DataAnalyzer analizó la data de este nodo y encontró lo siguiente:
+""" + data_insights_json + """
+
+⚠️ **MUY IMPORTANTE:** Estos insights son CRUCIALES para elegir la estrategia correcta.
+Úsalos para entender la estructura REAL de los datos antes de procesarlos.
+"""
+
+        # Agregar insights acumulados de nodos ANTERIORES (si existen)
         if accumulated_insights:
             insights_json = json.dumps(accumulated_insights, indent=2, ensure_ascii=False)
-            self.logger.info(f"📊 CodeGenerator recibe {len(accumulated_insights)} keys con insights acumulados")
+            self.logger.info(f"📊 CodeGenerator recibe {len(accumulated_insights)} nodos con insights acumulados")
             prompt += """
-**🔍 Insights acumulados (análisis previos):**
-Los siguientes insights fueron obtenidos al analizar la data en nodos anteriores.
-ÚSALOS para tomar decisiones correctas sobre cómo procesar la data:
+**🔍 Insights acumulados (de nodos anteriores):**
+Los siguientes insights fueron obtenidos en análisis de nodos previos del workflow:
 """ + insights_json + """
-
-⚠️ **MUY IMPORTANTE:** Estos insights son CRUCIALES para elegir la estrategia correcta:
-- Analiza esta información ANTES de elegir tu estrategia de implementación
 """
 
         # Agregar errores previos si es un retry
