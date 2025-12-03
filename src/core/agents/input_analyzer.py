@@ -3,17 +3,17 @@ InputAnalyzerAgent - Decide estrategia de ejecución.
 
 Responsabilidad:
     Analizar si necesitamos entender la data antes de resolver la tarea.
-    Ahora recibe Context Summary para tomar mejores decisiones.
+    Recibe contexto YA FILTRADO (solo keys nuevas) del Orchestrator.
 
 Características:
     - Modelo: gpt-4o (más confiable, evita errores de padding)
     - Ejecuciones: UNA SOLA VEZ (no se repite en retries)
     - Tool calling: NO
     - Costo: ~$0.0025 por ejecución
-    - Context-aware: Ve qué ya se analizó para evitar redundancia
+    - Determinístico: El filtrado de keys ya analizadas se hace en el Orchestrator
 """
 
-from typing import Dict, Optional, Set
+from typing import Dict, Optional
 import json
 import time
 from openai import AsyncOpenAI
@@ -32,16 +32,14 @@ class InputAnalyzerAgent(BaseAgent):
     async def execute(
         self,
         task: str,
-        functional_context: Dict,
-        analyzed_keys: Set[str]
+        functional_context: Dict
     ) -> AgentResponse:
         """
         Analiza la tarea y contexto para decidir estrategia.
 
         Args:
             task: Tarea a resolver (en lenguaje natural)
-            functional_context: Contexto funcional YA truncado y filtrado (sin config)
-            analyzed_keys: Set de keys que ya fueron analizadas en nodos previos
+            functional_context: Contexto funcional YA FILTRADO (solo keys nuevas, sin las ya analizadas)
 
         Returns:
             AgentResponse con:
@@ -50,11 +48,12 @@ class InputAnalyzerAgent(BaseAgent):
                 - reasoning: str
         """
         try:
-            # El contexto ya viene truncado por el Orchestrator
-            # No necesitamos hacer _summarize_context()
+            # El contexto ya viene:
+            # 1. Filtrado por el Orchestrator (solo keys NO analizadas)
+            # 2. Truncado para el LLM
 
             # Construir prompt
-            prompt = self._build_prompt(task, functional_context, analyzed_keys)
+            prompt = self._build_prompt(task, functional_context)
 
             # Llamar a OpenAI
             start_time = time.time()
@@ -119,30 +118,24 @@ class InputAnalyzerAgent(BaseAgent):
 
     # Métodos de truncado eliminados - ahora se usa truncate_for_llm() del Orchestrator
 
-    def _build_prompt(self, task: str, functional_context: Dict, analyzed_keys: Set[str]) -> str:
+    def _build_prompt(self, task: str, functional_context: Dict) -> str:
         """Construye el prompt para el modelo"""
 
-        # Serializar analyzed_keys
-        analyzed_keys_section = ""
-        if analyzed_keys:
-            analyzed_keys_list = list(analyzed_keys)
-            analyzed_keys_section = f"""
-📚 **KEYS YA ANALIZADAS:**
-{json.dumps(analyzed_keys_list, indent=2, ensure_ascii=False)}
+        # Si el contexto está vacío, no hay nada que analizar
+        context_note = ""
+        if not functional_context:
+            context_note = "\n⚠️ NOTA: El contexto está VACÍO. No hay data que analizar.\n"
 
-Las keys listadas arriba YA FUERON ANALIZADAS en nodos anteriores.
-NO necesitas volver a analizarlas. Solo enfócate en keys NUEVAS que no aparecen en esta lista.
-"""
+        return f"""Decide si el CONTEXTO contiene data opaca (binaria/base64) que necesita análisis.
 
-        return f"""Decide si el CONTEXTO ACTUAL contiene data opaca (binaria/base64) que necesita análisis.
-
-⚠️ REGLA CRÍTICA: Solo mira el CONTEXTO ACTUAL. NO especules sobre lo que la tarea PODRÍA generar.
+⚠️ IMPORTANTE: Este contexto YA ESTÁ FILTRADO - solo contiene keys que NO han sido analizadas.
+Solo mira lo que hay aquí. NO especules sobre lo que la tarea PODRÍA generar.
 
 Tarea: {task}
 
-Contexto funcional ACTUAL:
+Contexto a evaluar:
 {json.dumps(functional_context, indent=2, ensure_ascii=False)}
-{analyzed_keys_section}
+{context_note}
 
 Devuelve JSON:
 {{
@@ -151,7 +144,7 @@ Devuelve JSON:
   "reasoning": "Por qué decidiste esto"
 }}
 
-✅ needs_analysis=TRUE SOLO si en el contexto ACTUAL hay:
+✅ needs_analysis=TRUE SOLO si en el contexto hay:
 - PDFs en base64 (marcados "<base64 PDF: N chars>")
 - Imágenes en base64 (marcados "<base64 image: N chars>")
 - Data binaria que necesita decodificarse
@@ -160,10 +153,9 @@ Devuelve JSON:
 - El contexto está vacío o casi vacío
 - Solo hay strings, números, booleans normales
 - El texto ya es legible (no binario)
-- Las keys ya están en analyzed_keys
 
-🚫 NO especules sobre lo que la tarea PODRÍA crear. Solo analiza lo que YA EXISTE en el contexto.
-Si el contexto no tiene data opaca AHORA MISMO → needs_analysis=FALSE
+🚫 NO especules sobre lo que la tarea PODRÍA crear. Solo analiza lo que YA EXISTE.
+Si el contexto no tiene data opaca → needs_analysis=FALSE
 
 Complejidad (basada en la TAREA):
 - "simple": 1-2 pasos

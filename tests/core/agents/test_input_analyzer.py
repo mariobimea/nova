@@ -39,11 +39,10 @@ async def test_input_analyzer_simple_task(input_analyzer, mock_openai_client):
 
     mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
 
-    # Ejecutar con nueva firma
+    # Ejecutar (analyzed_keys ya no se pasa, el filtrado se hace en el Orchestrator)
     response = await input_analyzer.execute(
         task="Suma estos dos números",
-        functional_context={"num1": 5, "num2": 10},
-        analyzed_keys=set()
+        functional_context={"num1": 5, "num2": 10}
     )
 
     assert response.success is True
@@ -70,8 +69,7 @@ async def test_input_analyzer_complex_task_pdf(input_analyzer, mock_openai_clien
 
     response = await input_analyzer.execute(
         task="Extrae el total de esta factura",
-        functional_context={"pdf_data_b64": "JVBERi0x..."},
-        analyzed_keys=set()
+        functional_context={"pdf_data_b64": "JVBERi0x..."}
     )
 
     assert response.success is True
@@ -89,8 +87,7 @@ async def test_input_analyzer_handles_openai_error(input_analyzer, mock_openai_c
 
     response = await input_analyzer.execute(
         task="Test task",
-        functional_context={"key": "value"},
-        analyzed_keys=set()
+        functional_context={"key": "value"}
     )
 
     assert response.success is False
@@ -113,9 +110,35 @@ async def test_input_analyzer_invalid_response_structure(input_analyzer, mock_op
 
     response = await input_analyzer.execute(
         task="Test",
-        functional_context={"key": "value"},
-        analyzed_keys=set()
+        functional_context={"key": "value"}
     )
 
     assert response.success is False
     assert "Respuesta inválida" in response.error
+
+
+@pytest.mark.asyncio
+async def test_input_analyzer_empty_context(input_analyzer, mock_openai_client):
+    """Contexto vacío no necesita análisis"""
+
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = json.dumps({
+        "needs_analysis": False,
+        "complexity": "simple",
+        "reasoning": "El contexto está vacío, no hay data que analizar"
+    })
+    mock_response.usage = Mock()
+    mock_response.usage.prompt_tokens = 80
+    mock_response.usage.completion_tokens = 40
+
+    mock_openai_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+    # Contexto vacío (todas las keys ya fueron analizadas, filtradas por Orchestrator)
+    response = await input_analyzer.execute(
+        task="Procesa los datos",
+        functional_context={}
+    )
+
+    assert response.success is True
+    assert response.data["needs_analysis"] is False

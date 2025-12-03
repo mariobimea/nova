@@ -57,15 +57,19 @@ class MultiAgentOrchestrator:
         self.max_retries = max_retries
         self.logger = logger
 
-    def _summarize_context_for_step(self, context: Dict) -> Dict:
+    def _summarize_context_for_step(self, context: Dict, max_string_length: int = 500) -> Dict:
         """
         Resume el contexto para guardarlo en steps (evita guardar PDFs/data pesada).
 
+        IMPORTANTE: Este método ahora es MENOS agresivo para permitir debugging.
+        Los strings se truncan a 500 chars por defecto (antes 200).
+
         Args:
             context: Contexto completo
+            max_string_length: Máximo de caracteres para strings (default 500)
 
         Returns:
-            Contexto resumido (strings largos truncados)
+            Contexto resumido (strings largos truncados pero legibles)
         """
         # Keys que NUNCA deben truncarse (metadata estructural crítica)
         PRESERVE_KEYS = {
@@ -73,7 +77,12 @@ class MultiAgentOrchestrator:
             "database_schema",   # Variante singular
             "db_schemas",        # Otra variante
             "schema",            # Schema genérico
-            "metadata"           # Metadata estructural
+            "metadata",          # Metadata estructural
+            "task",              # La tarea siempre completa
+            "prompt",            # Prompts completos
+            "error",             # Errores completos
+            "error_message",     # Mensajes de error
+            "reasoning",         # Razonamiento de agentes
         }
 
         summary = {}
@@ -85,20 +94,35 @@ class MultiAgentOrchestrator:
                 continue
 
             if isinstance(value, str):
-                if len(value) > 200:
-                    # Truncar strings largos (PDFs en base64, emails, etc.)
-                    summary[key] = f"<string: {len(value)} chars>"
+                if len(value) > max_string_length:
+                    # Truncar strings largos pero mostrar inicio + fin
+                    preview_len = max_string_length // 2
+                    summary[key] = f"{value[:preview_len]}...[truncated {len(value)} chars]...{value[-100:]}"
                 else:
                     summary[key] = value
             elif isinstance(value, bytes):
                 # Bytes (PDFs, imágenes)
                 summary[key] = f"<bytes: {len(value)} bytes>"
-            elif isinstance(value, (list, dict)):
-                # Listas/dicts: mostrar tipo y cantidad
-                summary[key] = f"<{type(value).__name__}: {len(value)} items>"
+            elif isinstance(value, dict):
+                # Dicts: resumir recursivamente si es pequeño, sino mostrar keys
+                if len(value) <= 10:
+                    summary[key] = self._summarize_context_for_step(value, max_string_length)
+                else:
+                    summary[key] = f"<dict: {len(value)} keys: {list(value.keys())[:10]}...>"
+            elif isinstance(value, list):
+                # Listas: mostrar primeros elementos si es pequeña
+                if len(value) <= 5:
+                    summary[key] = value
+                else:
+                    summary[key] = f"<list: {len(value)} items, first 3: {value[:3]}...>"
+            elif isinstance(value, set):
+                # Sets: convertir a lista para JSON
+                summary[key] = list(value) if len(value) <= 10 else f"<set: {len(value)} items>"
             elif isinstance(value, (int, float, bool)):
                 # Números y booleanos: mantener valor real
                 summary[key] = value
+            elif value is None:
+                summary[key] = None
             else:
                 # Otros tipos: mostrar tipo
                 summary[key] = f"<{type(value).__name__}>"
@@ -233,21 +257,28 @@ class MultiAgentOrchestrator:
             # 2. InputAnalyzer (UNA SOLA VEZ)
             self.logger.info(f"📊 Ejecutando InputAnalyzer...")
 
-            # Obtener contexto funcional y truncarlo
+            # Obtener contexto funcional completo
             functional_context = context_manager.get_functional_context()
-            functional_context_truncated = truncate_for_llm(functional_context)
 
             # Obtener analyzed_keys del summary
             analyzed_keys = context_manager.get_summary().get_analyzed_keys()
 
+            # 🔥 FILTRAR: Solo pasar keys NO analizadas al InputAnalyzer
+            # Esto hace la decisión determinística (no depende del LLM)
+            new_keys_context = {
+                k: v for k, v in functional_context.items()
+                if k not in analyzed_keys
+            }
+            new_keys_context_truncated = truncate_for_llm(new_keys_context)
+
             self.logger.info(f"   Context keys: {len(context_state.current)} total")
             self.logger.info(f"   Functional keys: {len(functional_context)} (after filtering config)")
-            self.logger.info(f"   Already analyzed: {len(analyzed_keys)} keys")
+            self.logger.info(f"   Already analyzed: {len(analyzed_keys)} keys: {list(analyzed_keys)}")
+            self.logger.info(f"   New keys for InputAnalyzer: {len(new_keys_context)} keys: {list(new_keys_context.keys())}")
 
             input_analysis = await self.input_analyzer.execute(
                 task=task,
-                functional_context=functional_context_truncated,
-                analyzed_keys=analyzed_keys
+                functional_context=new_keys_context_truncated  # Solo keys nuevas
             )
 
             # 🔥 Registrar step 1: InputAnalyzer
@@ -260,7 +291,9 @@ class MultiAgentOrchestrator:
                     agent_response=input_analysis,
                     input_data={
                         "task": task,
-                        "context": self._summarize_context_for_step(context_state.current)
+                        "new_keys_context": self._summarize_context_for_step(new_keys_context_truncated),
+                        "already_analyzed_keys": list(analyzed_keys),
+                        "_all_functional_keys": list(functional_context.keys())
                     }
                 )
             )
@@ -301,6 +334,7 @@ class MultiAgentOrchestrator:
                         )
 
                         # Registrar step 2: DataAnalyzer
+                        # GUARDAR LO QUE REALMENTE RECIBIÓ: functional_context, analyzed_keys, error_history
                         steps_to_persist.append(
                             self._create_step_record(
                                 step_number=2,
@@ -309,9 +343,10 @@ class MultiAgentOrchestrator:
                                 attempt_number=analysis_attempt,
                                 agent_response=data_analysis,
                                 input_data={
-                                    "context": self._summarize_context_for_step(context_state.current),
+                                    "functional_context": self._summarize_context_for_step(functional_context_truncated),
+                                    "analyzed_keys": list(analyzed_keys),
                                     "error_history": analysis_errors,
-                                    "hint": input_analysis.data.get("reasoning")
+                                    "_input_analysis_hint": input_analysis.data.get("reasoning")
                                 },
                                 generated_code=data_analysis.data.get("analysis_code") if data_analysis.success else None
                             )
@@ -335,6 +370,7 @@ class MultiAgentOrchestrator:
                         )
 
                         # Registrar step 2.1: CodeValidator (análisis)
+                        # GUARDAR LO QUE REALMENTE RECIBIÓ: code, context
                         steps_to_persist.append(
                             self._create_step_record(
                                 step_number=2,  # mismo step_number pero diferente step_name
@@ -344,7 +380,8 @@ class MultiAgentOrchestrator:
                                 agent_response=code_val,
                                 input_data={
                                     "code": data_analysis.data["analysis_code"],
-                                    "context_keys": list(context_state.current.keys())
+                                    "context_keys": list(context_state.current.keys()),
+                                    "_context_sample": {k: type(v).__name__ for k, v in list(context_state.current.items())[:10]}
                                 }
                             )
                         )
@@ -395,7 +432,10 @@ class MultiAgentOrchestrator:
                                     attempt_number=analysis_attempt,
                                     agent_response=e2b_response,
                                     input_data={
-                                        "code_summary": f"<code: {len(data_analysis.data['analysis_code'])} chars>"
+                                        "analysis_code": data_analysis.data['analysis_code'],
+                                        "context_keys": list(context_state.current.keys()),
+                                        "timeout": 30,
+                                        "_insights_extracted": list(insights.keys()) if isinstance(insights, dict) else None
                                     }
                                 )
                             )
@@ -420,7 +460,10 @@ class MultiAgentOrchestrator:
                                     attempt_number=analysis_attempt,
                                     agent_response=e2b_response,
                                     input_data={
-                                        "code_summary": f"<code: {len(data_analysis.data['analysis_code'])} chars>"
+                                        "analysis_code": data_analysis.data['analysis_code'],
+                                        "context_keys": list(context_state.current.keys()),
+                                        "timeout": 30,
+                                        "_exception": str(e)
                                     }
                                 )
                             )
@@ -443,6 +486,7 @@ class MultiAgentOrchestrator:
                         )
 
                         # Registrar step 2.3: AnalysisValidator
+                        # GUARDAR LO QUE REALMENTE RECIBIÓ: task, functional_context_before, insights, analysis_code, execution_result
                         steps_to_persist.append(
                             self._create_step_record(
                                 step_number=2,
@@ -452,7 +496,10 @@ class MultiAgentOrchestrator:
                                 agent_response=insights_val,
                                 input_data={
                                     "task": task,
-                                    "insights": insights
+                                    "functional_context_before": self._summarize_context_for_step(functional_context_before_analysis),
+                                    "insights": insights,
+                                    "analysis_code_length": len(data_analysis.data["analysis_code"]),
+                                    "execution_result_preview": str(insights_result)[:500] if insights_result else None
                                 }
                             )
                         )
@@ -584,6 +631,7 @@ class MultiAgentOrchestrator:
                     )
 
                     # 🔥 Registrar step 3: CodeGenerator
+                    # GUARDAR LO QUE REALMENTE RECIBIÓ: task, functional_context, config_context, accumulated_insights, error_history, node_type, node_id
                     steps_to_persist.append(
                         self._create_step_record(
                             step_number=3,
@@ -593,10 +641,14 @@ class MultiAgentOrchestrator:
                             agent_response=code_gen,
                             input_data={
                                 "task": task,
-                                "context": self._summarize_context_for_step(context_state.current),
-                                "data_insights": context_state.data_insights,
-                                "analysis_validation": context_state.analysis_validation,  # 🔥 NUEVO: Incluir validation reasoning
-                                "error_history": execution_state.errors
+                                "functional_context": self._summarize_context_for_step(functional_context_truncated),
+                                "config_context": self._summarize_context_for_step(config_context),
+                                "accumulated_insights": accumulated_insights,
+                                "data_insights": context_state.data_insights,  # Del DataAnalyzer actual
+                                "analysis_validation": context_state.analysis_validation,
+                                "error_history": execution_state.errors,
+                                "node_type": node_type,
+                                "node_id": node_id
                             },
                             generated_code=code_gen.data.get("code") if code_gen.success else None
                         )
@@ -617,6 +669,7 @@ class MultiAgentOrchestrator:
                     )
 
                     # 🔥 Registrar step 4: CodeValidator
+                    # GUARDAR LO QUE REALMENTE RECIBIÓ: code, context
                     steps_to_persist.append(
                         self._create_step_record(
                             step_number=4,
@@ -626,7 +679,8 @@ class MultiAgentOrchestrator:
                             agent_response=code_val,
                             input_data={
                                 "code": code_gen.data["code"],
-                                "context_keys": list(context_state.current.keys())
+                                "context_keys": list(context_state.current.keys()),
+                                "_context_types": {k: type(v).__name__ for k, v in list(context_state.current.items())[:15]}
                             }
                         )
                     )
@@ -702,8 +756,12 @@ class MultiAgentOrchestrator:
                                     attempt_number=attempt,
                                     agent_response=e2b_response,
                                     input_data={
-                                        "code_summary": f"<code: {len(code_gen.data['code'])} chars>",
-                                        "context": self._summarize_context_for_step(context_state.current)
+                                        "code": code_gen.data["code"],
+                                        "context": self._summarize_context_for_step(context_state.current),
+                                        "timeout": timeout,
+                                        "_execution_error": True,
+                                        "_stderr": stderr[:1000] if stderr else None,
+                                        "_stdout": stdout[:1000] if stdout else None
                                     },
                                     sandbox_id=sandbox_id
                                 )
@@ -767,8 +825,12 @@ class MultiAgentOrchestrator:
                                     attempt_number=attempt,
                                     agent_response=e2b_response,
                                     input_data={
-                                        "code_summary": f"<code: {len(code_gen.data['code'])} chars>",
-                                        "context": self._summarize_context_for_step(context_state.current)
+                                        "code": code_gen.data["code"],
+                                        "context_before": self._summarize_context_for_step(context_state.current),
+                                        "timeout": timeout,
+                                        "_stdout": stdout[:1000] if stdout else None,
+                                        "_stderr": stderr[:500] if stderr else None,
+                                        "_context_updates": list(updated_context.keys()) if updated_context else []
                                     },
                                     sandbox_id=sandbox_id
                                 )
@@ -797,8 +859,10 @@ class MultiAgentOrchestrator:
                                 attempt_number=attempt,
                                 agent_response=e2b_response,
                                 input_data={
-                                    "code_summary": f"<code: {len(code_gen.data['code'])} chars>",
-                                    "context": self._summarize_context_for_step(context_state.current)
+                                    "code": code_gen.data["code"],
+                                    "context": self._summarize_context_for_step(context_state.current),
+                                    "timeout": timeout,
+                                    "_exception": str(e)
                                 },
                                 sandbox_id=sandbox_id
                             )
@@ -829,6 +893,7 @@ class MultiAgentOrchestrator:
                     )
 
                     # 🔥 Registrar step 6: OutputValidator
+                    # GUARDAR LO QUE REALMENTE RECIBIÓ: task, functional_context_before, functional_context_after, code_executed, execution_result
                     steps_to_persist.append(
                         self._create_step_record(
                             step_number=6,
@@ -838,9 +903,11 @@ class MultiAgentOrchestrator:
                             agent_response=output_val,
                             input_data={
                                 "task": task,
-                                "context_before": self._summarize_context_for_step(context_state.initial),
-                                "context_after": self._summarize_context_for_step(context_state.current),
-                                "code_summary": f"<code: {len(code_gen.data['code'])} chars>"
+                                "functional_context_before": self._summarize_context_for_step(functional_context_before_exec),
+                                "functional_context_after": self._summarize_context_for_step(functional_context_after_exec),
+                                "code_executed": code_gen.data["code"],
+                                "execution_result": execution_state.execution_result,
+                                "_changes_detected": output_val.data.get("changes_detected", []) if output_val.success else []
                             }
                         )
                     )
