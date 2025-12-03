@@ -294,6 +294,7 @@ Devuelve JSON:
 5. **Valores sin sentido** → Los valores agregados no tienen relación con la tarea
 6. **Código falló** → El código crasheó o no hizo nada útil
 7. **Error en stderr** → Hay un error de Python en stderr
+8. **Valor incorrecto** → El valor nuevo o modificado no corresponde con la tarea solicitada
 
 🟢 Es VÁLIDO si:
 1. **Cambios relevantes** → Se agregaron o modificaron datos importantes
