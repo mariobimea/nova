@@ -605,17 +605,16 @@ Los siguientes insights fueron obtenidos al analizar la data en nodos anteriores
 ```
 """
             prompt += f"""
-⚠️ **ANÁLISIS CRÍTICO REQUERIDO** (intento {len(error_history) + 1}):
+⚠️ **INTENTO {len(error_history) + 1} - CORRIGE EL ERROR:**
 
-El código anterior falló. ANTES de escribir código nuevo, DEBES:
+Analiza INTERNAMENTE (sin escribir tu análisis):
+- ¿Qué dice el error?
+- ¿Qué línea del código anterior causó el problema?
+- ¿Qué asunción incorrecta hiciste?
 
-1. **LEER el mensaje de error cuidadosamente** - ¿Qué dice exactamente que está mal?
-2. **ANALIZAR tu código anterior** - ¿Qué línea específica causó el problema?
-3. **ENTENDER la causa raíz** - ¿Por qué tu lógica produjo el resultado incorrecto?
-4. **CAMBIAR TU ESTRATEGIA** - Si el enfoque falló {len(error_history)} veces, necesitas una aproximación DIFERENTE
+Si el enfoque ya falló {len(error_history)} veces, CAMBIA DE ESTRATEGIA completamente.
 
-🚫 NO repitas el mismo código con cambios cosméticos.
-✅ SÍ piensa: "¿Qué asunción incorrecta hice? ¿Qué caso no consideré?"
+🚨 **IMPORTANTE: Responde SOLO con código Python. NO escribas explicaciones, análisis ni comentarios fuera del código.**
 """
 
         prompt += """
@@ -708,16 +707,61 @@ print(json.dumps({
         return prompt
 
     def _extract_code(self, content: str) -> str:
-        """Extrae código Python del mensaje (limpia markdown si existe)"""
+        """
+        Extrae código Python del mensaje.
+
+        Maneja casos donde el modelo incluye texto explicativo antes del código:
+        - Texto seguido de ```python...```
+        - Texto seguido de código sin markdown
+        """
         code = content.strip()
 
-        # Limpiar markdown
-        if code.startswith("```python"):
-            code = code.split("```python", 1)[1]
-        elif code.startswith("```"):
-            code = code.split("```", 1)[1]
+        # Caso 1: Hay bloques de markdown ```python...```
+        if "```python" in code:
+            # Extraer todo entre ```python y ```
+            parts = code.split("```python")
+            if len(parts) > 1:
+                code_part = parts[1]
+                if "```" in code_part:
+                    code = code_part.split("```")[0]
+                else:
+                    code = code_part
+                return code.strip()
 
-        if code.endswith("```"):
-            code = code.rsplit("```", 1)[0]
+        # Caso 2: Hay bloques de markdown ```...``` (sin especificar python)
+        if "```" in code:
+            parts = code.split("```")
+            if len(parts) >= 3:  # texto ``` código ``` texto
+                code = parts[1]
+                return code.strip()
+
+        # Caso 3: El modelo escribió texto antes del código Python real
+        # Detectar si empieza con texto no-Python y buscar donde empieza el código
+        lines = code.split('\n')
+
+        # Indicadores de que una línea es código Python
+        python_starters = ['import ', 'from ', 'def ', 'class ', 'if ', 'for ', 'while ',
+                          'try:', 'with ', '#', '@', 'async ', 'context', 'result',
+                          'data', 'pdf', 'text', 'match', 'pattern', 'total']
+
+        # Buscar la primera línea que parece código Python
+        code_start_idx = 0
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+            # Si la línea empieza con algo que parece Python, empezar ahí
+            if any(line_stripped.lower().startswith(starter) for starter in python_starters):
+                code_start_idx = i
+                break
+            # Si la línea tiene formato de prosa (empieza con letra y tiene ":" al final de palabra)
+            # o contiene markdown (**texto**), es texto explicativo
+            if line_stripped and line_stripped[0].isupper() and not line_stripped.startswith(('Exception', 'Error', 'True', 'False', 'None')):
+                # Probablemente es texto explicativo, seguir buscando
+                continue
+
+        # Reconstruir el código desde donde empieza
+        if code_start_idx > 0:
+            code = '\n'.join(lines[code_start_idx:])
 
         return code.strip()
