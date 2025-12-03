@@ -264,7 +264,8 @@ class SemanticCodeCacheClient:
         query: str,
         threshold: float = 0.85,
         top_k: int = 5,
-        available_keys: Optional[List[str]] = None
+        available_keys: Optional[List[str]] = None,
+        workflow_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Search for similar cached code.
@@ -274,6 +275,7 @@ class SemanticCodeCacheClient:
             threshold: Minimum similarity score (0-1, default: 0.85)
             top_k: Maximum number of results (default: 5)
             available_keys: List of keys available in current context (for filtering)
+            workflow_id: Workflow ID to filter results (only return code from same workflow)
 
         Returns:
             List of code matches with score, code, metadata
@@ -282,7 +284,8 @@ class SemanticCodeCacheClient:
             matches = client.search_code(
                 query="Extract text from PDF\\nInput: pdf_data (base64)",
                 threshold=0.85,
-                available_keys=["pdf_data", "client_id"]
+                available_keys=["pdf_data", "client_id"],
+                workflow_id=5
             )
             if matches:
                 best_code = matches[0]['code']
@@ -298,6 +301,8 @@ class SemanticCodeCacheClient:
             }
             if available_keys is not None:
                 payload["available_keys"] = available_keys
+            if workflow_id is not None:
+                payload["workflow_id"] = workflow_id
 
             response = self.session.post(
                 f"{self.base_url}/code/search",
@@ -307,7 +312,7 @@ class SemanticCodeCacheClient:
             response.raise_for_status()
 
             data = response.json()
-            logger.info(f"Code cache search: {data['count']} matches above threshold {threshold}")
+            logger.info(f"Code cache search: {data['count']} matches above threshold {threshold} (workflow_id={workflow_id})")
 
             return data['matches']
 
@@ -342,7 +347,8 @@ class SemanticCodeCacheClient:
         node_description: str,
         libraries_used: List[str],
         required_keys: Optional[List[str]] = None,
-        analyzed_keys: Optional[Dict[str, Any]] = None
+        analyzed_keys: Optional[Dict[str, Any]] = None,
+        workflow_id: Optional[int] = None
     ) -> bool:
         """
         Save successful code execution to semantic cache.
@@ -358,6 +364,7 @@ class SemanticCodeCacheClient:
             libraries_used: List of libraries imported in code
             required_keys: Keys that the code actually uses (for validation)
             analyzed_keys: Data analysis results from DataAnalyzer (if executed)
+            workflow_id: Workflow ID for cache isolation (only same workflow can retrieve)
 
         Returns:
             True if saved successfully, False otherwise
@@ -373,7 +380,8 @@ class SemanticCodeCacheClient:
                 node_description="Extract invoice text",
                 libraries_used=["fitz", "base64"],
                 required_keys=["email_user", "email_password"],
-                analyzed_keys={"attachments": {"analysis": {"pdf_type": "scanned"}}}
+                analyzed_keys={"attachments": {"analysis": {"pdf_type": "scanned"}}},
+                workflow_id=5
             )
         """
         try:
@@ -400,6 +408,10 @@ class SemanticCodeCacheClient:
             if analyzed_keys is not None and analyzed_keys:
                 payload["analyzed_keys"] = analyzed_keys
 
+            # Add workflow_id for cache isolation
+            if workflow_id is not None:
+                payload["workflow_id"] = workflow_id
+
             response = self.session.post(
                 f"{self.base_url}/code/save",
                 json=payload,
@@ -409,7 +421,7 @@ class SemanticCodeCacheClient:
 
             data = response.json()
             if data.get("success"):
-                logger.info(f"✓ Code saved to cache: {data.get('id')}")
+                logger.info(f"✓ Code saved to cache: {data.get('id')} (workflow_id={workflow_id})")
                 return True
             else:
                 logger.warning(f"Code save returned success=False: {data}")

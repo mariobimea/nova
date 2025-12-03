@@ -465,13 +465,15 @@ class CachedExecutor(ExecutorStrategy):
                 logger.debug(f"  All available keys: {sorted(all_available_keys)}")
 
                 # Search semantic cache with threshold 0.85
+                # IMPORTANT: Filter by workflow_id to isolate cache per workflow
                 threshold = 0.85
                 top_k = 3
                 matches = self.semantic_cache.search_code(
                     query=semantic_query,
                     threshold=threshold,
                     top_k=top_k,
-                    available_keys=list(all_available_keys)  # Use ALL keys (schema + credentials)
+                    available_keys=list(all_available_keys),  # Use ALL keys (schema + credentials)
+                    workflow_id=workflow_id  # Isolate cache per workflow
                 )
 
                 # ALSO search with threshold=0.0 to get ALL results for debugging
@@ -479,7 +481,8 @@ class CachedExecutor(ExecutorStrategy):
                     query=semantic_query,
                     threshold=0.0,  # Get ALL results regardless of score
                     top_k=10,  # Get up to 10 results for analysis
-                    available_keys=list(all_available_keys)  # Use ALL keys (schema + credentials)
+                    available_keys=list(all_available_keys),  # Use ALL keys (schema + credentials)
+                    workflow_id=workflow_id  # Isolate cache per workflow
                 )
 
                 search_time_ms = (time.time() - search_start) * 1000
@@ -489,6 +492,7 @@ class CachedExecutor(ExecutorStrategy):
                     'query': semantic_query[:500] + '...' if len(semantic_query) > 500 else semantic_query,  # Truncate long queries
                     'threshold': threshold,
                     'top_k': top_k,
+                    'workflow_id': workflow_id,  # Log workflow isolation
                     'available_keys': available_keys,
                     'all_available_keys': sorted(list(all_available_keys)),
                     'search_time_ms': round(search_time_ms, 2),
@@ -767,7 +771,8 @@ class CachedExecutor(ExecutorStrategy):
                                     node=node,
                                     context=context,
                                     result=result,
-                                    cache_context=cache_ctx
+                                    cache_context=cache_ctx,
+                                    workflow_id=workflow_id  # Pass workflow_id for cache isolation
                                 )
                             except Exception as e:
                                 logger.warning(f"Failed to save to semantic cache: {e}")
@@ -1056,7 +1061,8 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
         node: Optional[Dict[str, Any]],
         context: Dict[str, Any],
         result: Dict[str, Any],
-        cache_context: Optional[Dict[str, Any]] = None
+        cache_context: Optional[Dict[str, Any]] = None,
+        workflow_id: Optional[int] = None
     ) -> None:
         """
         Save successful code execution to semantic cache.
@@ -1068,6 +1074,7 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
             context: Execution context
             result: Execution result (must be successful)
             cache_context: Optional cache context for semantic matching
+            workflow_id: Workflow ID for cache isolation (only same workflow can retrieve)
         """
         if not self.semantic_cache:
             return
@@ -1091,6 +1098,7 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
 
             logger.debug(f"Required keys extracted from code: {required_keys}")
             logger.debug(f"Saving with FULL input_schema: {list(full_input_schema.keys())}")
+            logger.debug(f"Saving with workflow_id: {workflow_id}")
             if analyzed_keys:
                 logger.debug(f"Saving with analyzed_keys: {list(analyzed_keys.keys())}")
 
@@ -1105,11 +1113,12 @@ Example: "Extracts text from PDF using PyMuPDF. Works with standard PDFs (not sc
                 node_description=node.get('description', task[:100]) if node else task[:100],
                 libraries_used=libraries_used,
                 required_keys=required_keys,  # Save for validation later
-                analyzed_keys=analyzed_keys  # Include DataAnalyzer results if present
+                analyzed_keys=analyzed_keys,  # Include DataAnalyzer results if present
+                workflow_id=workflow_id  # Isolate cache per workflow
             )
 
             if success:
-                logger.info(f"✓ Code saved to semantic cache")
+                logger.info(f"✓ Code saved to semantic cache (workflow_id={workflow_id})")
                 logger.debug(f"  Prompt: {task[:60]}...")
                 logger.debug(f"  Libraries: {', '.join(libraries_used)}")
                 logger.debug(f"  Required keys: {required_keys}")
