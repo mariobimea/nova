@@ -568,17 +568,20 @@ class MultiAgentOrchestrator:
                                 )
                                 self.logger.info(f"✅ Registered analysis for keys: {analyzed_keys} with {len(insights)} insights")
 
-                                # 🔥 NUEVO: Actualizar _analyzed_keys en el contexto
-                                # Esto permite al InputAnalyzer saber qué keys ya fueron analizadas
+                                # 🔥 Actualizar _analyzed_keys en el contexto (como diccionario)
+                                # Formato: {key: {insights, node_id}} - permite semantic cache usar los insights
                                 if '_analyzed_keys' not in context_state.current:
-                                    context_state.current['_analyzed_keys'] = []
+                                    context_state.current['_analyzed_keys'] = {}
 
-                                # Agregar las keys recién analizadas
+                                # Agregar las keys recién analizadas con sus insights
                                 for key in analyzed_keys:
                                     if key not in context_state.current['_analyzed_keys']:
-                                        context_state.current['_analyzed_keys'].append(key)
+                                        context_state.current['_analyzed_keys'][key] = {
+                                            "node_id": current_node_id,
+                                            "insights": insights  # Guardar insights para semantic cache
+                                        }
 
-                                self.logger.info(f"📝 Updated _analyzed_keys: {context_state.current['_analyzed_keys']}")
+                                self.logger.info(f"📝 Updated _analyzed_keys: {list(context_state.current['_analyzed_keys'].keys())}")
 
                         execution_state.data_analysis = {
                             **data_analysis.data,

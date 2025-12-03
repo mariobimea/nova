@@ -333,6 +333,10 @@ def build_cache_context(context: Dict[str, Any]) -> Dict[str, Any]:
     config = {}
     insights = []
 
+    # DEBUG: Log what context keys arrive
+    all_context_keys = list(context.keys())
+    logger.info(f"📥 build_cache_context called with {len(all_context_keys)} keys: {all_context_keys}")
+
     # Extract _analyzed_keys if present (from DataAnalyzer)
     analyzed_keys = context.get('_analyzed_keys', {})
 
@@ -352,6 +356,12 @@ def build_cache_context(context: Dict[str, Any]) -> Dict[str, Any]:
 
         # Regular data → schema
         input_schema[key] = _extract_type(value)
+
+    # DEBUG: Log what we're returning
+    logger.info(f"📤 build_cache_context returning:")
+    logger.info(f"   input_schema keys: {list(input_schema.keys())}")
+    logger.info(f"   config keys: {list(config.keys())}")
+    logger.info(f"   analyzed_keys: {list(analyzed_keys.keys()) if analyzed_keys else 'empty'}")
 
     return {
         "input_schema": input_schema,

@@ -563,10 +563,11 @@ class GraphEngine:
         # Initialize context
         initial_ctx = initial_context or {}
 
-        # 🔥 NUEVO: Inicializar _analyzed_keys para tracking de análisis
+        # 🔥 Inicializar _analyzed_keys para tracking de análisis
         # Esto permite al InputAnalyzer saber qué keys ya fueron analizadas
+        # Formato: {key: {analysis_data}} - diccionario con resultados del análisis
         if '_analyzed_keys' not in initial_ctx:
-            initial_ctx['_analyzed_keys'] = []
+            initial_ctx['_analyzed_keys'] = {}
 
         context = ContextManager(initial_ctx)
 

@@ -419,12 +419,28 @@ class CachedExecutor(ExecutorStrategy):
         semantic_cache_metadata = None  # Will be populated if semantic cache search happens
 
         logger.info(f"🔎 Semantic cache check: semantic_cache={'enabled' if self.semantic_cache else 'disabled'}, cache_ctx={'present' if cache_ctx else 'missing'}")
+
+        # DEBUG: Log cache_ctx details
+        if cache_ctx:
+            input_schema = cache_ctx.get('input_schema', {})
+            analyzed_keys = cache_ctx.get('analyzed_keys', {})
+            logger.info(f"📋 cache_ctx details:")
+            logger.info(f"   input_schema keys: {list(input_schema.keys())}")
+            logger.info(f"   input_schema: {input_schema}")
+            logger.info(f"   analyzed_keys: {list(analyzed_keys.keys()) if analyzed_keys else 'empty'}")
+        else:
+            logger.warning(f"⚠️ cache_ctx is None or missing!")
+
         if self.semantic_cache and cache_ctx:
             try:
                 import time
                 search_start = time.time()
 
                 semantic_query = self._build_semantic_query(prompt_task, node, cache_ctx)
+
+                # DEBUG: Log the actual semantic query built
+                logger.info(f"🔍 Semantic query built ({len(semantic_query)} chars):")
+                logger.info(f"   Query preview: {semantic_query[:300]}...")
 
                 # Extract available keys from input_schema
                 available_keys = list(cache_ctx.get('input_schema', {}).keys())
