@@ -13,6 +13,6 @@
 team_id = "608eb540-d17b-4420-b632-6514e50a105d"
 memory_mb = 2_048
 cpu_count = 2
-dockerfile = "e2b-v3-vision.Dockerfile"
-template_name = "nova-engine-v3"
-template_id = "ybdni0ui0l3vsumat82v"
+dockerfile = "e2b-v4-multiformat.Dockerfile"
+template_name = "nova-engine-v4"
+template_id = "jv6tng9kik3nom340nx0"

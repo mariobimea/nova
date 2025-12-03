@@ -14,6 +14,8 @@ This directory contains documentation for external integrations available in NOV
 ### Document Processing
 
 - **[pdf.md](pdf.md)** - Extract text from PDFs, search content, extract images, read forms (PyMuPDF/fitz)
+- **[csv.md](csv.md)** - Read/write CSV files, handle delimiters, encoding, convert to dictionaries (Python csv module)
+- **[xlsx.md](xlsx.md)** - Read/write Excel files (.xlsx/.xls), multiple sheets, pandas integration (openpyxl, xlrd)
 
 ### Database
 
